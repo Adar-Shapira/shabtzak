@@ -1,34 +1,31 @@
+# backend/app/routers/departments.py
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
 from sqlalchemy import select, insert, update, delete, func
-from sqlalchemy.exc import IntegrityError
 from app.db import SessionLocal
 from app.models.department import Department
-from app.models.soldier import Soldier  # to block delete if used
+from app.models.soldier import Soldier
+from pydantic import BaseModel
 
 router = APIRouter(prefix="/departments", tags=["departments"])
 
 class DepartmentIn(BaseModel):
     name: str
 
-@router.get("")
+@router.get("", response_model=list[dict])
 def list_departments():
     with SessionLocal() as s:
-        rows = s.execute(select(Department).order_by(Department.id)).scalars().all()
-        return [{"id": d.id, "name": d.name} for d in rows]
+        rows = s.execute(select(Department.id, Department.name).order_by(Department.id)).all()
+        return [{"id": r.id, "name": r.name} for r in rows]
 
 @router.post("", status_code=201)
 def create_department(payload: DepartmentIn):
     with SessionLocal() as s:
-        try:
-            new_id = s.execute(
-                insert(Department).values(name=payload.name).returning(Department.id)
-            ).scalar_one()
-            s.commit()
-            return {"id": new_id, **payload.model_dump()}
-        except IntegrityError:
-            s.rollback()
-            raise HTTPException(status_code=409, detail="Department name already exists")
+        name = payload.name.strip()
+        if not name:
+            raise HTTPException(400, "Name required")
+        res = s.execute(insert(Department).values(name=name).returning(Department.id))
+        s.commit()
+        return {"id": res.scalar_one(), "name": name}
 
 @router.patch("/{dept_id}")
 def update_department(dept_id: int, payload: DepartmentIn):
@@ -36,7 +33,7 @@ def update_department(dept_id: int, payload: DepartmentIn):
         res = s.execute(update(Department).where(Department.id == dept_id)
                         .values(name=payload.name.strip()))
         if res.rowcount == 0:
-            raise HTTPException(status_code=404, detail="Department not found")
+            raise HTTPException(404, "Department not found")
         s.commit()
         return {"id": dept_id, "name": payload.name.strip()}
 
@@ -47,10 +44,9 @@ def delete_department(dept_id: int):
             select(func.count()).select_from(Soldier).where(Soldier.department_id == dept_id)
         ).scalar_one()
         if used:
-            raise HTTPException(status_code=400, detail="Department is used by soldiers")
+            raise HTTPException(400, "Department is used by soldiers")
         res = s.execute(delete(Department).where(Department.id == dept_id))
         if res.rowcount == 0:
-            raise HTTPException(status_code=404, detail="Department not found")
+            raise HTTPException(404, "Department not found")
         s.commit()
         return None
-

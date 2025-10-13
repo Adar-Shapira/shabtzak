@@ -3,7 +3,7 @@ from typing import Optional, List
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, field_validator
-from sqlalchemy import select, insert, update
+from sqlalchemy import select, insert, update, delete
 from sqlalchemy.exc import IntegrityError
 
 from app.db import SessionLocal
@@ -14,7 +14,6 @@ from app.models.soldier import Soldier
 from sqlalchemy import func
 
 router = APIRouter(prefix="/missions", tags=["missions"])
-
 
 # -----------------------------
 # Helpers for role handling
@@ -37,7 +36,6 @@ def _bucket(sol: Soldier) -> str:
             return name
     return "Soldier"
 
-
 # -----------------------------
 # Pydantic models
 # -----------------------------
@@ -59,7 +57,6 @@ class MissionIn(BaseModel):
             return _t.fromisoformat(v + ":00")
         return v
 
-
 class MissionUpdate(BaseModel):
     name: Optional[str] = None
     start_hour: Optional[time] = None
@@ -76,7 +73,6 @@ class MissionUpdate(BaseModel):
             from datetime import time as _t
             return _t.fromisoformat(v + ":00")
         return v
-
 
 # -----------------------------
 # Routes
@@ -98,11 +94,8 @@ def list_missions():
             "required_drivers": m.required_drivers,
         } for m in rows]
 
-
 @router.post("", status_code=201)
 def create_mission(payload: MissionIn):
-    if payload.end_hour <= payload.start_hour:
-        raise HTTPException(status_code=400, detail="end_hour must be after start_hour")
     with SessionLocal() as s:
         try:
             new_id = s.execute(
@@ -117,34 +110,51 @@ def create_mission(payload: MissionIn):
                 ).returning(Mission.id)
             ).scalar_one()
             s.commit()
-            return {"id": new_id, **payload.model_dump()}
+            # Normalize time fields to strings (consistent with list_missions)
+            return {
+                "id": new_id,
+                "name": payload.name,
+                "start_hour": payload.start_hour.isoformat(),
+                "end_hour": payload.end_hour.isoformat(),
+                "required_soldiers": payload.required_soldiers,
+                "required_commanders": payload.required_commanders,
+                "required_officers": payload.required_officers,
+                "required_drivers": payload.required_drivers,
+            }
         except IntegrityError:
             s.rollback()
             raise HTTPException(status_code=409, detail="Mission name already exists")
 
-
 @router.patch("/{mission_id}")
 def update_mission(mission_id: int, payload: MissionUpdate):
-    if payload.start_hour and payload.end_hour and payload.end_hour <= payload.start_hour:
-        raise HTTPException(status_code=400, detail="end_hour must be after start_hour")
-
     with SessionLocal() as s:
         exists = s.execute(select(Mission.id).where(Mission.id == mission_id)).scalar_one_or_none()
         if not exists:
             raise HTTPException(status_code=404, detail="Mission not found")
 
-        values = {k: v for k, v in payload.model_dump().items() if v is not None}
+        values = payload.model_dump(exclude_none=True)
         if not values:
             return {"id": mission_id}
 
         try:
             s.execute(update(Mission).where(Mission.id == mission_id).values(**values))
             s.commit()
-            return {"id": mission_id, **values}
         except IntegrityError:
             s.rollback()
             raise HTTPException(status_code=409, detail="Mission name already exists")
 
+        # Reload to serialize consistently
+        m = s.execute(select(Mission).where(Mission.id == mission_id)).scalar_one()
+        return {
+            "id": m.id,
+            "name": m.name,
+            "start_hour": m.start_hour.isoformat(),
+            "end_hour": m.end_hour.isoformat(),
+            "required_soldiers": m.required_soldiers,
+            "required_commanders": m.required_commanders,
+            "required_officers": m.required_officers,
+            "required_drivers": m.required_drivers,
+        }
 
 @router.get("/{mission_id}/coverage")
 def mission_coverage(

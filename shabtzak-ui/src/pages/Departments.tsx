@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import Modal from "../components/Modal";
+import { useDisclosure } from "../hooks/useDisclosure";
 
 type Department = { id: number; name: string };
 
@@ -12,6 +14,9 @@ export default function DepartmentsPage() {
   const [editId, setEditId] = useState<number|null>(null);
   const [editName, setEditName] = useState("");
 
+  const addDlg = useDisclosure(false);
+  const [newDeptName, setNewDeptName] = useState("");
+
   const load = async () => {
     setLoading(true); setErr(null);
     try { const r = await api.get<Department[]>("/departments"); setRows(r.data); }
@@ -22,7 +27,12 @@ export default function DepartmentsPage() {
 
   const createRow = async (e:React.FormEvent) => {
     e.preventDefault();
-    try { await api.post("/departments", {name: newName.trim()}); setNewName(""); await load(); }
+    try { 
+      await api.post("/departments", {name: newName.trim()});
+      setNewDeptName("");
+      addDlg.close();
+      await load();
+    }
     catch (e:any){ setErr(e?.response?.data?.detail ?? "Failed to create"); }
   };
 
@@ -40,11 +50,21 @@ export default function DepartmentsPage() {
 
   return (
     <div style={{maxWidth:800, margin:"24px auto", padding:16}}>
-      <h1>Departments</h1>
-      <form onSubmit={createRow} style={{display:"flex", gap:8, marginBottom:12}}>
-        <input placeholder="New department" value={newName} onChange={e=>setNewName(e.target.value)} required />
-        <button type="submit">Add</button>
-      </form>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+        <h1>Departments</h1>
+        <button onClick={addDlg.open} style={{ padding:"8px 12px", borderRadius:8 }}>Add Department</button>
+      </div>
+
+      <Modal open={addDlg.isOpen} onClose={addDlg.close} title="Add Department">
+        <form onSubmit={createRow} style={{ display:"grid", gridTemplateColumns:"1fr auto", gap:10 }}>
+          <input value={newDeptName} onChange={(e)=>setNewDeptName(e.target.value)} placeholder="Department name" required />
+          <div style={{ display:"flex", gap:8 }}>
+            <button type="button" onClick={addDlg.close}>Cancel</button>
+            <button type="submit">Add</button>
+          </div>
+        </form>
+      </Modal>
+
       {err && <div style={{color:"crimson"}}>{err}</div>}
       {loading && <div>Loading…</div>}
 

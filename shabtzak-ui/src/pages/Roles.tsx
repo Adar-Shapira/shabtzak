@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import Modal from "../components/Modal";
+import { useDisclosure } from "../hooks/useDisclosure";
 import { api } from "../api";
 
 type Role = { id: number; name: string; is_core: boolean };
@@ -9,8 +11,9 @@ export default function RolesPage() {
   const [loading, setLoading] = useState(false);
 
   // create form
-  const [newName, setNewName] = useState("");
-  const [newCore, setNewCore] = useState(false);
+  const addDlg = useDisclosure(false);
+  const [newRoleName, setNewRoleName] = useState("");
+  const [newIsCore, setNewIsCore] = useState(false);
 
   // edit state
   const [editId, setEditId] = useState<number | null>(null);
@@ -32,8 +35,9 @@ export default function RolesPage() {
     e.preventDefault();
     setErr(null);
     try {
-      await api.post("/roles", { name: newName.trim(), is_core: newCore });
-      setNewName(""); setNewCore(false);
+      await api.post("/roles", { name: newRoleName.trim(), is_core: newIsCore });
+      setNewRoleName(""); setNewIsCore(false);
+      addDlg.close();
       await load();
     } catch (e:any) {
       setErr(e?.response?.data?.detail ?? "Failed to create role");
@@ -59,14 +63,24 @@ export default function RolesPage() {
 
   return (
     <div style={{maxWidth:800, margin:"24px auto", padding:16}}>
-      <h1>Roles</h1>
-      <form onSubmit={createRole} style={{display:"flex", gap:8, marginBottom:12}}>
-        <input placeholder="New role name" value={newName} onChange={e=>setNewName(e.target.value)} required />
-        <label style={{display:"flex", alignItems:"center", gap:4}}>
-          <input type="checkbox" checked={newCore} onChange={e=>setNewCore(e.target.checked)} /> Core
-        </label>
-        <button type="submit">Add</button>
-      </form>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+        <h1>Roles</h1>
+        <button onClick={addDlg.open} style={{ padding:"8px 12px", borderRadius:8 }}>Add Role</button>
+      </div>
+
+      <Modal open={addDlg.isOpen} onClose={addDlg.close} title="Add Role">
+        <form onSubmit={createRole} style={{ display:"grid", gridTemplateColumns:"1.6fr 1fr auto", gap:10 }}>
+          <input value={newRoleName} onChange={(e)=>setNewRoleName(e.target.value)} placeholder="Role name" required />
+          <label style={{ display:"flex", alignItems:"center", gap:8 }}>
+            <input type="checkbox" checked={newIsCore} onChange={(e)=>setNewIsCore(e.target.checked)} />
+            Core
+          </label>
+          <div style={{ display:"flex", gap:8 }}>
+            <button type="button" onClick={addDlg.close}>Cancel</button>
+            <button type="submit">Add</button>
+          </div>
+        </form>
+      </Modal>
 
       {err && <div style={{color:"crimson"}}>{err}</div>}
       {loading && <div>Loading…</div>}

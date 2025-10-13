@@ -1,5 +1,9 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import Modal from "../components/Modal";
+import { useDisclosure } from "../hooks/useDisclosure";
+
+
 
 type Mission = {
   id: number;
@@ -20,9 +24,14 @@ export default function MissionsPage() {
   const [loading, setLoading] = useState(false);
 
   // create
+  const addDlg = useDisclosure(false);
   const [newName, setNewName] = useState("");
   const [newStart, setNewStart] = useState("08:00");
-  const [newEnd, setNewEnd] = useState("12:00");
+  const [newEnd, setNewEnd] = useState("16:00");
+  const [reqSoldiers, setReqSoldiers] = useState(0);
+  const [reqCommanders, setReqCommanders] = useState(0);
+  const [reqOfficers, setReqOfficers] = useState(0);
+  const [reqDrivers, setReqDrivers] = useState(0);
   const [newReq, setNewReq] = useState({ soldiers:0, commanders:0, officers:0, drivers:0 });
 
   // edit
@@ -45,14 +54,16 @@ export default function MissionsPage() {
     try {
       await api.post("/missions", {
         name: newName.trim(),
-        start_hour: newStart,
+        start_hour: newStart,   // "HH:MM"
         end_hour: newEnd,
-        required_soldiers: newReq.soldiers,
-        required_commanders: newReq.commanders,
-        required_officers: newReq.officers,
-        required_drivers: newReq.drivers,
+        required_soldiers: reqSoldiers,
+        required_commanders: reqCommanders,
+        required_officers: reqOfficers,
+        required_drivers: reqDrivers,
       });
-      setNewName(""); setNewStart("08:00"); setNewEnd("12:00"); setNewReq({soldiers:0,commanders:0,officers:0,drivers:0});
+      setNewName(""); setNewStart("08:00"); setNewEnd("16:00");
+      setReqSoldiers(0); setReqCommanders(0); setReqOfficers(0); setReqDrivers(0);
+      addDlg.close();
       await load();
     } catch(e:any){ setErr(e?.response?.data?.detail ?? "Failed to create mission"); }
   };
@@ -92,7 +103,28 @@ export default function MissionsPage() {
 
   return (
     <div style={{maxWidth:1100, margin:"24px auto", padding:16}}>
-      <h1>Missions</h1>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+        <h1>Missions</h1>
+        <button onClick={addDlg.open} style={{ padding:"8px 12px", borderRadius:8 }}>Add Mission</button>
+      </div>
+
+      <Modal open={addDlg.isOpen} onClose={addDlg.close} title="Add Mission" maxWidth={640}>
+        <form onSubmit={createRow} style={{ display:"grid", gridTemplateColumns:"2fr 1fr 1fr", gap:10 }}>
+          <input value={newName} onChange={(e)=>setNewName(e.target.value)} placeholder="Mission name" required />
+          <input type="time" value={newStart} onChange={(e)=>setNewStart(e.target.value)} />
+          <input type="time" value={newEnd} onChange={(e)=>setNewEnd(e.target.value)} />
+
+          <label>Soldiers <input type="number" value={reqSoldiers} min={0} onChange={(e)=>setReqSoldiers(+e.target.value||0)} /></label>
+          <label>Commanders <input type="number" value={reqCommanders} min={0} onChange={(e)=>setReqCommanders(+e.target.value||0)} /></label>
+          <label>Officers <input type="number" value={reqOfficers} min={0} onChange={(e)=>setReqOfficers(+e.target.value||0)} /></label>
+          <label>Drivers <input type="number" value={reqDrivers} min={0} onChange={(e)=>setReqDrivers(+e.target.value||0)} /></label>
+
+          <div style={{ gridColumn:"1 / -1", display:"flex", gap:8, justifyContent:"flex-end" }}>
+            <button type="button" onClick={addDlg.close}>Cancel</button>
+            <button type="submit">Add</button>
+          </div>
+        </form>
+      </Modal>
 
       <form onSubmit={createRow} style={{display:"grid", gridTemplateColumns:"2fr repeat(2,1fr) repeat(4,1fr) 1fr", gap:8, marginBottom:16}}>
         <input placeholder="Name" value={newName} onChange={e=>setNewName(e.target.value)} required />
