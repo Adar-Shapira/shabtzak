@@ -1,0 +1,10 @@
+# Normalize line endings across all systems
+* text=auto eol=lf
+
+# Ensure shell and Python scripts always use LF
+*.py text eol=lf
+*.sh text eol=lf
+
+# Ensure Windows batch files keep CRLF
+*.bat text eol=crlf
+*.ps1 text eol=crlf
