@@ -5,6 +5,7 @@ __pycache__/
 .env
 .env.* 
 *.sqlite3
+backend/dev.db
 
 # Node / Vite
 node_modules/
@@ -19,6 +20,9 @@ Thumbs.db
 .vscode/
 *.log
 
-# Docker
+# Docker / cache
 **/.pytest_cache/
 **/.mypy_cache/
+
+# Temporary exports
+shabtzak-review.zip
