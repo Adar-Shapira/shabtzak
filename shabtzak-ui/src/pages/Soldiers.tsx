@@ -8,6 +8,14 @@ type Role = { id: number; name: string; is_core: boolean };
 type Department = { id: number; name: string };
 type Mission = { id: number; name: string };
 
+type Vacation = {
+  id: number;
+  soldier_id: number;
+  start_date: string; // ISO yyyy-mm-dd
+  end_date: string;   // ISO yyyy-mm-dd
+  note?: string | null;
+};
+
 type Soldier = {
     id: number;
     name: string;
@@ -22,6 +30,14 @@ type Soldier = {
 function tokensToArray(s: string | undefined | null): string[] {
     if (!s) return [];
     return s.split(/[;,]/).map(x => x.trim()).filter(Boolean);
+}
+
+function getDeptName(s: Soldier): string {
+  return s.department_name?.trim() || "(no department)";
+}
+
+function byName(a: Soldier, b: Soldier) {
+  return a.name.localeCompare(b.name);
 }
 
 export default function SoldiersPage() {
@@ -49,6 +65,313 @@ export default function SoldiersPage() {
     const [editRoleIds, setEditRoleIds] = useState<number[]>([]);
     const [editDeptId, setEditDeptId] = useState<number | "">("");
     const [editRestrictions, setEditRestrictions] = useState<string[]>([]);
+
+    // --- Department CRUD (moved from Departments page) ---
+    const deptDlg = useDisclosure(false);           // controls the add/edit department modal
+    const [deptEditId, setDeptEditId] = useState<number | null>(null);
+    const [deptName, setDeptName] = useState("");  // input for add/rename
+
+    const startAddDept = () => {
+    setDeptEditId(null);
+    setDeptName("");
+    deptDlg.open();
+    };
+
+    const startEditDept = (id: number, name: string) => {
+    setDeptEditId(id);
+    setDeptName(name);
+    deptDlg.open();
+    };
+
+    const cancelDeptDialog = () => {
+    setDeptEditId(null);
+    setDeptName("");
+    deptDlg.close();
+    };
+
+    const saveDept = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErr(null);
+    try {
+        if (deptEditId == null) {
+        // create
+        await api.post("/departments", { name: deptName.trim() });
+        } else {
+        // rename
+        await api.patch(`/departments/${deptEditId}`, { name: deptName.trim() });
+        }
+        cancelDeptDialog();
+        await loadAll(); // refresh groups and selects
+    } catch (e: any) {
+        setErr(e?.response?.data?.detail ?? "Failed to save department");
+    }
+    };
+
+    const deleteDept = async (id: number, name: string) => {
+    if (!confirm(`Delete department "${name}"? (blocked if soldiers are assigned)`)) return;
+    setErr(null);
+    try {
+        await api.delete(`/departments/${id}`);
+        await loadAll();
+    } catch (e: any) {
+        setErr(e?.response?.data?.detail ?? "Failed to delete department");
+    }
+    };
+
+    // --- Roles CRUD (moved from Roles page) ---
+    const rolesDlg = useDisclosure(false);
+    const [roleEditId, setRoleEditId] = useState<number | null>(null);
+    const [roleName, setRoleName] = useState("");
+    const [roleIsCore, setRoleIsCore] = useState<boolean>(false);
+    const [isRoleFormOpen, setIsRoleFormOpen] = useState(false);
+
+    const startAddRole = () => {
+    setRoleEditId(null);
+    setRoleName("");
+    setRoleIsCore(false);
+    setIsRoleFormOpen(true);
+    rolesDlg.open();
+    };
+
+    const startEditRole = (id: number, name: string, is_core: boolean) => {
+    setRoleEditId(id);
+    setRoleName(name);
+    setRoleIsCore(is_core);
+    setIsRoleFormOpen(true);
+    rolesDlg.open();
+    };
+
+    const cancelRoleDialog = () => {
+    setRoleEditId(null);
+    setRoleName("");
+    setRoleIsCore(false);
+    setIsRoleFormOpen(false);
+    rolesDlg.close();
+    };
+
+    const saveRole = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErr(null);
+    try {
+        if (roleEditId == null) {
+        await api.post("/roles", { name: roleName.trim(), is_core: roleIsCore });
+        } else {
+        await api.patch(`/roles/${roleEditId}`, { name: roleName.trim(), is_core: roleIsCore });
+        }
+        // reset + refresh
+        setIsRoleFormOpen(false);
+        setRoleEditId(null);
+        setRoleName("");
+        setRoleIsCore(false);
+        await loadAll();
+    } catch (e: any) {
+        setErr(e?.response?.data?.detail ?? "Failed to save role");
+    }
+    };
+
+    const deleteRole = async (id: number, name: string) => {
+    if (!confirm(`Delete role "${name}"? (blocked if assigned to soldiers)`)) return;
+    setErr(null);
+    try {
+        await api.delete(`/roles/${id}`);
+        await loadAll();
+    } catch (e: any) {
+        setErr(e?.response?.data?.detail ?? "Failed to delete role");
+    }
+    };
+
+    // --- Vacations per Soldier ---
+    const vacDlg = useDisclosure(false);
+    const [vacSoldier, setVacSoldier] = useState<Soldier | null>(null);
+    const [vacations, setVacations] = useState<Vacation[]>([]);
+    const [vacLoading, setVacLoading] = useState(false);
+
+    // vacation form state
+    const [vacEditId, setVacEditId] = useState<number | null>(null);
+    const [vacStart, setVacStart] = useState<string>("");
+    const [vacEnd, setVacEnd] = useState<string>("");
+    const [vacNote, setVacNote] = useState<string>("");
+
+    const openVacations = async (s: Soldier) => {
+        setErr(null);
+        setVacSoldier(s);
+
+        // Reset form
+        setVacEditId(null);
+        setVacStart("");
+        setVacEnd("");
+        setVacNote("");
+
+        await fetchVacations(s.id);   // load first
+        vacDlg.open();                // then open with data already in state
+    };
+
+    const closeVacations = () => {
+    setVacSoldier(null);
+    setVacations([]);
+    setVacEditId(null);
+    setVacStart("");
+    setVacEnd("");
+    setVacNote("");
+    vacDlg.close();
+    };
+
+    const startAddVacation = () => {
+    setVacEditId(null);
+    setVacStart("");
+    setVacEnd("");
+    setVacNote("");
+    };
+
+    const startEditVacation = (v: Vacation) => {
+    setVacEditId(v.id);
+    setVacStart(v.start_date);
+    setVacEnd(v.end_date);
+    setVacNote(v.note ?? "");
+    };
+
+    const saveVacation = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!vacSoldier) return;
+
+        if (vacStart && vacEnd && vacEnd < vacStart) {
+            alert("End date cannot be before start date.");
+            return;
+        }
+
+        setErr(null);
+        try {
+            const payload = { start_date: vacStart, end_date: vacEnd, note: vacNote || null };
+
+            if (vacEditId == null) {
+            // CREATE
+            let created: Vacation | null = null;
+            try {
+                const r = await api.post(`/soldiers/${vacSoldier.id}/vacations`, payload);
+                created = r.data as Vacation;
+            } catch (e: any) {
+                if (e?.response?.status === 404) {
+                const r = await api.post(`/vacations`, { ...payload, soldier_id: vacSoldier.id });
+                created = r.data as Vacation;
+                } else {
+                throw e;
+                }
+            }
+
+            // If backend returned the created row, update immediately; otherwise hard refresh.
+            if (created && created.id) {
+                setVacations(prev => [...prev, created!]);
+            } else {
+                await fetchVacations(vacSoldier.id);
+            }
+            } else {
+            // UPDATE
+            let updated: Vacation | null = null;
+            try {
+                const r = await api.patch(`/soldiers/${vacSoldier.id}/vacations/${vacEditId}`, payload);
+                updated = r.data as Vacation;
+            } catch (e: any) {
+                if (e?.response?.status === 404) {
+                const r = await api.patch(`/vacations/${vacEditId}`, { ...payload, soldier_id: vacSoldier.id });
+                updated = r.data as Vacation;
+                } else {
+                throw e;
+                }
+            }
+
+            // If backend returned the updated row, merge it; otherwise hard refresh.
+            if (updated && updated.id) {
+                setVacations(prev => prev.map(v => (v.id === updated!.id ? updated! : v)));
+            } else {
+                await fetchVacations(vacSoldier.id);
+            }
+            }
+
+            // Reset form
+            setVacEditId(null);
+            setVacStart("");
+            setVacEnd("");
+            setVacNote("");
+
+        } catch (e: any) {
+            setErr(e?.response?.data?.detail ?? "Failed to save vacation");
+        }
+    };
+
+    const fetchVacations = async (soldierId: number) => {
+        setVacLoading(true);
+
+        // helper to normalize IDs to numbers (handles string/number mismatches)
+        const sameId = (x: any, y: any) => Number(x) === Number(y);
+
+        try {
+            // 1) Try soldier-scoped endpoint
+            try {
+            const r = await api.get(`/soldiers/${soldierId}/vacations`, { params: { t: Date.now() } });
+            const payload = r.data ?? [];
+            const items = Array.isArray(payload) ? payload : (payload.items ?? payload.results ?? []);
+            // Even if the API misbehaves, enforce client-side filter:
+            setVacations(items.filter((v: Vacation) => sameId(v.soldier_id, soldierId)));
+
+            return;
+            } catch (_e) {
+            // fall through
+            }
+
+            // 2) Try global endpoint with common param names
+            const tryGlobal = async (param: string) => {
+            const r = await api.get(`/vacations`, { params: { [param]: soldierId, t: Date.now() } });
+            const payload = r.data ?? [];
+            const items = Array.isArray(payload) ? payload : (payload.items ?? payload.results ?? []);
+            // Force client-side filter in case the backend ignores the param:
+            setVacations(items.filter((v: Vacation) => sameId(v.soldier_id, soldierId)));
+
+            return true;
+            };
+
+            const ok =
+            (await tryGlobal("soldier_id").catch(() => false)) ||
+            (await tryGlobal("soldierId").catch(() => false)) ||
+            (await tryGlobal("sid").catch(() => false));
+
+            if (!ok) {
+            setErr("Failed to load vacations: no matching endpoint");
+            // Keep whatever we had; don't clear the list
+            }
+        } catch (e: any) {
+            setErr(e?.response?.data?.detail ?? "Failed to load vacations");
+        } finally {
+            setVacLoading(false);
+        }
+    };
+
+    const deleteVacation = async (v: Vacation) => {
+        if (!vacSoldier) return;
+        if (!confirm(`Delete vacation ${v.start_date} → ${v.end_date}?`)) return;
+        setErr(null);
+        try {
+            let ok = false;
+            try {
+            const r = await api.delete(`/soldiers/${vacSoldier.id}/vacations/${v.id}`);
+            ok = r.status >= 200 && r.status < 300;
+            } catch (e: any) {
+            if (e?.response?.status === 404) {
+                const r = await api.delete(`/vacations/${v.id}`);
+                ok = r.status >= 200 && r.status < 300;
+            } else {
+                throw e;
+            }
+            }
+            // Optimistic remove
+            if (ok) {
+            setVacations(prev => prev.filter(x => x.id !== v.id));
+            } else {
+            await fetchVacations(vacSoldier.id);
+            }
+        } catch (e: any) {
+            setErr(e?.response?.data?.detail ?? "Failed to delete vacation");
+        }
+    };
 
     // DELETE
     const removeSoldier = async (id: number) => {
@@ -83,6 +406,32 @@ export default function SoldiersPage() {
     };
 
     useEffect(() => { loadAll(); }, []);
+
+    // Always refresh the list whenever the Vacations modal opens
+    useEffect(() => {
+        if (vacDlg.isOpen && vacSoldier) {
+            fetchVacations(vacSoldier.id);
+        }
+    }, [vacDlg.isOpen, vacSoldier?.id]);
+
+    // ↓ Add this block
+    const groups = useMemo(() => {
+        const m = new Map<string, Soldier[]>();
+        for (const s of soldiers) {
+            const dep = getDeptName(s);
+            if (!m.has(dep)) m.set(dep, []);
+            m.get(dep)!.push(s);
+        }
+        // sort soldiers inside each department by name
+        for (const [, arr] of m) arr.sort(byName);
+        return m;
+    }, [soldiers]);
+
+    // Sorted department names A→Z
+    const departmentNames = useMemo(
+    () => Array.from(groups.keys()).sort((a, b) => a.localeCompare(b)),
+    [groups]
+    );
 
     // helpers for <select multiple>
     const onMultiChangeStrings = (ev: React.ChangeEvent<HTMLSelectElement>, setState: (vals: string[]) => void) => {
@@ -155,153 +504,458 @@ export default function SoldiersPage() {
 
     return (
         <div style={{ maxWidth: 1200, margin: "24px auto", padding: 16, fontFamily: "sans-serif" }}>
+
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <h1>Soldiers</h1>
-            <button onClick={addDlg.open} style={{ padding: "8px 12px", borderRadius: 8 }}>Add Soldier</button>
-        </div>
+                <h1>Soldiers</h1>
+                <div style={{ display: "flex", gap: 8 }}>
+                    <button onClick={() => rolesDlg.open()} style={{ padding: "8px 12px", borderRadius: 8 }}>
+                    Roles
+                    </button>
+                    <button onClick={startAddDept} style={{ padding: "8px 12px", borderRadius: 8 }}>
+                    Add Department
+                    </button>
+                    <button onClick={addDlg.open} style={{ padding: "8px 12px", borderRadius: 8 }}>
+                    Add Soldier
+                    </button>
+                </div>
+            </div>
 
-        <Modal open={addDlg.isOpen} onClose={addDlg.close} title="Add Soldier" maxWidth={720}>
-            <form
-                onSubmit={createSoldier}
-                style={{ display: "grid", gridTemplateColumns: "1.6fr 1.2fr 1.2fr 1.2fr auto", gap: 10 }}
-            >
-                <input value={newName} onChange={(e)=>setNewName(e.target.value)} placeholder="Full name" required />
-
-                {/* Roles multi */}
-                <div>
-                <div style={{ fontSize: 12, opacity:.8, marginBottom: 4 }}>Roles</div>
-                <select
-                    multiple
-                    size={5}
-                    value={newRoleIds.map(String)}
-                    onChange={(e) => {
-                    const selected = Array.from(e.target.selectedOptions).map(o => Number(o.value));
-                    setNewRoleIds(selected);
-                    }}
-                    style={{ width: "100%" }}
+            <Modal open={addDlg.isOpen} onClose={addDlg.close} title="Add Soldier" maxWidth={720}>
+                <form
+                    onSubmit={createSoldier}
+                    style={{ display: "grid", gridTemplateColumns: "1.6fr 1.2fr 1.2fr 1.2fr auto", gap: 10 }}
                 >
-                    {roles.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
-                </select>
-                </div>
+                    <input value={newName} onChange={(e)=>setNewName(e.target.value)} placeholder="Full name" required />
 
-                {/* Department */}
-                <div>
-                <div style={{ fontSize: 12, opacity:.8, marginBottom: 4 }}>Department</div>
-                <select value={newDeptId} onChange={(e)=>setNewDeptId(e.target.value ? Number(e.target.value) : "")} style={{ width: "100%" }}>
-                    <option value="">(no department)</option>
-                    {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-                </select>
-                </div>
+                    {/* Roles multi */}
+                    <div>
+                    <div style={{ fontSize: 12, opacity:.8, marginBottom: 4 }}>Roles</div>
+                    <select
+                        multiple
+                        size={5}
+                        value={newRoleIds.map(String)}
+                        onChange={(e) => {
+                        const selected = Array.from(e.target.selectedOptions).map(o => Number(o.value));
+                        setNewRoleIds(selected);
+                        }}
+                        style={{ width: "100%" }}
+                    >
+                        {roles.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                    </select>
+                    </div>
 
-                {/* Restrictions */}
-                <div>
-                <div style={{ fontSize: 12, opacity:.8, marginBottom: 4 }}>Restrictions</div>
-                <select multiple size={5} value={newRestrictions} onChange={(e)=>onMultiChangeStrings(e, setNewRestrictions)} style={{ width: "100%" }}>
-                    {restrictionOptions.map(n => <option key={n} value={n}>{n}</option>)}
-                </select>
-                </div>
+                    {/* Department */}
+                    <div>
+                    <div style={{ fontSize: 12, opacity:.8, marginBottom: 4 }}>Department</div>
+                    <select value={newDeptId} onChange={(e)=>setNewDeptId(e.target.value ? Number(e.target.value) : "")} style={{ width: "100%" }}>
+                        <option value="">(no department)</option>
+                        {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                    </select>
+                    </div>
 
-                <div style={{ alignSelf: "end", display: "flex", gap: 8 }}>
-                <button type="button" onClick={addDlg.close}>Cancel</button>
-                <button type="submit">Add</button>
-                </div>
-            </form>
-        </Modal>
+                    {/* Restrictions */}
+                    <div>
+                    <div style={{ fontSize: 12, opacity:.8, marginBottom: 4 }}>Restrictions</div>
+                    <select multiple size={5} value={newRestrictions} onChange={(e)=>onMultiChangeStrings(e, setNewRestrictions)} style={{ width: "100%" }}>
+                        {restrictionOptions.map(n => <option key={n} value={n}>{n}</option>)}
+                    </select>
+                    </div>
 
-        {err && <div style={{ color: "crimson", marginBottom: 12 }}>{err}</div>}
-        {loading && <div>Loading…</div>}
+                    <div style={{ alignSelf: "end", display: "flex", gap: 8 }}>
+                    <button type="button" onClick={addDlg.close}>Cancel</button>
+                    <button type="submit">Add</button>
+                    </div>
+                </form>
+            </Modal>
 
-        {/* List + Edit */}
-        {!loading && (
-            <table width="100%" cellPadding={8} style={{ borderCollapse: "collapse" }}>
-                <thead>
-                    <tr>
-                    <th align="left" style={{ width: 60 }}>ID</th>
-                    <th align="left">Name</th>
-                    <th align="left" style={{ width: 320 }}>Roles</th>
-                    <th align="left" style={{ width: 220 }}>Department</th>
-                    <th align="left" style={{ width: 260 }}>Restrictions</th>
-                    <th align="left" style={{ width: 180 }}>Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {soldiers.map(s => {
-                    const isEditing = editId === s.id;
-                    return (
-                        <tr key={s.id} style={{ borderTop: "1px solid #ddd" }}>
-                        <td>{s.id}</td>
+            {/* Add/Rename Department Modal */}
+            <Modal open={deptDlg.isOpen} onClose={cancelDeptDialog} title={deptEditId == null ? "Add Department" : "Rename Department"} maxWidth={480}>
+                <form onSubmit={saveDept} style={{ display: "grid", gap: 10 }}>
+                    <input
+                    value={deptName}
+                    onChange={(e) => setDeptName(e.target.value)}
+                    placeholder="Department name"
+                    required
+                    />
+                    <div style={{ display: "flex", justifyContent: "end", gap: 8 }}>
+                        <button type="button" onClick={cancelDeptDialog}>Cancel</button>
+                        <button type="submit">{deptEditId == null ? "Add" : "Save"}</button>
+                    </div>
+                </form>
+            </Modal>
 
-                        {/* name */}
-                        <td>
-                            {isEditing ? (
-                            <input value={editName} onChange={(e)=>setEditName(e.target.value)} style={{ width: "100%" }} />
-                            ) : s.name}
-                        </td>
+            {/* Roles Modal */}
+            <Modal open={rolesDlg.isOpen} onClose={cancelRoleDialog} title="Roles" maxWidth={640}>
+                <div style={{ display: "grid", gap: 12 }}>
+                    {/* Toolbar */}
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div style={{ fontSize: 12, opacity: 0.75 }}>
+                        Manage roles (core roles are typically required for key assignments)
+                    </div>
+                    <div style={{ display: "flex", gap: 8 }}>
+                        <button onClick={startAddRole}>Add Role</button>
+                        <button onClick={cancelRoleDialog}>Close</button>
+                    </div>
+                    </div>
 
-                        <td>
-                            {isEditing ? (
-                                <select
-                                multiple
-                                size={4}
-                                value={editRoleIds.map(String)}
-                                onChange={(e) => {
-                                    const selected = Array.from(e.target.selectedOptions).map(o => Number(o.value));
-                                    setEditRoleIds(selected);
+                    {/* When adding or editing, show the small form at top */}
+                    {isRoleFormOpen && (
+                        <form onSubmit={saveRole} style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: 8, alignItems: "center", padding: 8, border: "1px solid #eee", borderRadius: 8 }}>
+                            <input
+                            value={roleName}
+                            onChange={(e) => setRoleName(e.target.value)}
+                            placeholder="Role name"
+                            required
+                            />
+                            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14 }}>
+                            <input
+                                type="checkbox"
+                                checked={roleIsCore}
+                                onChange={(e) => setRoleIsCore(e.target.checked)}
+                            />
+                            Core
+                            </label>
+                            <div style={{ display: "flex", gap: 8 }}>
+                            <button type="submit">{roleEditId == null ? "Add" : "Save"}</button>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                setIsRoleFormOpen(false);
+                                setRoleEditId(null);
+                                setRoleName("");
+                                setRoleIsCore(false);
                                 }}
-                                style={{ width: "100%" }}
-                                >
-                                {roles.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
-                                </select>
-                            ) : (
-                                s.roles?.length ? s.roles.map(r => r.name).join(", ") : <span style={{opacity:.6}}>(none)</span>
-                            )}
-                        </td>
+                            >
+                                Cancel
+                            </button>
+                            </div>
+                        </form>
+                    )}
 
-                        {/* department */}
-                        <td>
-                            {isEditing ? (
-                            <select value={editDeptId} onChange={(e)=>setEditDeptId(e.target.value ? Number(e.target.value) : "")} style={{ width: "100%" }}>
-                                <option value="">(no department)</option>
-                                {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-                            </select>
-                            ) : (s.department_name ?? <span style={{opacity:.6}}>(none)</span>)}
-                        </td>
-
-                        {/* restrictions multi */}
-                        <td>
-                            {isEditing ? (
-                            <select multiple size={3} value={editRestrictions} onChange={(e)=>onMultiChangeStrings(e, setEditRestrictions)} style={{ width: "100%" }}>
-                                {restrictionOptions.map(n => <option key={n} value={n}>{n}</option>)}
-                            </select>
-                            ) : (
-                            (s.restrictions_tokens && s.restrictions_tokens.length)
-                                ? s.restrictions_tokens.join(", ")
-                                : <span style={{opacity:.6}}>(none)</span>
-                            )}
-                        </td>
-
-                        <td>
-                            {isEditing ? (
-                                <>
-                                    <button onClick={()=>saveEdit(s.id)}>Save</button>
-                                    <button onClick={cancelEdit} style={{ marginLeft: 8 }}>Cancel</button>
-                                </>
-                                ) : (
-                                <>
-                                    <button onClick={()=>startEdit(s)}>Edit</button>
-                                    <button onClick={()=>removeSoldier(s.id)} style={{ marginLeft: 8, color: "crimson" }}>
-                                    Delete
-                                    </button>
-                                </>
-                                )}
-                        </td>
+                    {/* Roles list */}
+                    <table width="100%" cellPadding={8} style={{ borderCollapse: "collapse" }}>
+                    <thead>
+                        <tr>
+                        <th align="left" style={{ width: 60 }}>ID</th>
+                        <th align="left">Name</th>
+                        <th align="left" style={{ width: 100 }}>Core</th>
+                        <th align="left" style={{ width: 180 }}>Actions</th>
                         </tr>
-                    );
+                    </thead>
+                    <tbody>
+                        {roles.map((r) => (
+                        <tr key={r.id} style={{ borderTop: "1px solid #eee" }}>
+                            <td>{r.id}</td>
+                            <td>{r.name}</td>
+                            <td>{r.is_core ? "Yes" : "No"}</td>
+                            <td>
+                            <button onClick={() => startEditRole(r.id, r.name, r.is_core)}>Edit</button>
+                            <button
+                                onClick={() => deleteRole(r.id, r.name)}
+                                style={{ marginLeft: 8, color: "crimson" }}
+                            >
+                                Delete
+                            </button>
+                            </td>
+                        </tr>
+                        ))}
+                        {roles.length === 0 && (
+                        <tr>
+                            <td colSpan={4} style={{ opacity: 0.7 }}>(No roles yet)</td>
+                        </tr>
+                        )}
+                    </tbody>
+                    </table>
+
+                </div>
+            </Modal>
+
+            {/* Vacations Modal */}
+            <Modal
+            open={vacDlg.isOpen}
+            onClose={closeVacations}
+            title={vacSoldier ? `Vacations — ${vacSoldier.name}` : "Vacations"}
+            maxWidth={720}
+            >
+                {!vacSoldier ? (
+                    <div style={{ opacity: 0.7 }}>No soldier selected.</div>
+                ) : (
+                    <div style={{ display: "grid", gap: 12 }}>
+                    {/* Toolbar */}
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <div style={{ fontSize: 12, opacity: 0.75 }}>
+                        Add date ranges when this soldier is unavailable.
+                        </div>
+                        <div style={{ display: "flex", gap: 8 }}>
+                        <button onClick={startAddVacation}>Add</button>
+                        <button onClick={closeVacations}>Close</button>
+                        </div>
+                    </div>
+
+                    {/* Add/Edit form */}
+                    <form onSubmit={saveVacation} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr auto", gap: 8, alignItems: "center" }}>
+                        <div>
+                        <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 4 }}>Start</div>
+                        <input type="date" value={vacStart} onChange={(e) => setVacStart(e.target.value)} required />
+                        </div>
+                        <div>
+                        <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 4 }}>End</div>
+                        <input type="date" value={vacEnd} onChange={(e) => setVacEnd(e.target.value)} required />
+                        </div>
+                        <div>
+                        <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 4 }}>Note</div>
+                        <input type="text" value={vacNote} onChange={(e) => setVacNote(e.target.value)} placeholder="Optional" />
+                        </div>
+                        <div style={{ display: "flex", gap: 8, alignItems: "end" }}>
+                        <button type="submit">{vacEditId == null ? "Add" : "Save"}</button>
+                        {vacEditId != null && (
+                            <button
+                            type="button"
+                            onClick={() => {
+                                setVacEditId(null);
+                                setVacStart("");
+                                setVacEnd("");
+                                setVacNote("");
+                            }}
+                            >
+                            Cancel
+                            </button>
+                        )}
+                        </div>
+                    </form>
+
+                    {/* Vacations list */}
+                    <table width="100%" cellPadding={8} style={{ borderCollapse: "collapse" }}>
+                        <thead>
+                        <tr>
+                            <th align="left" style={{ width: 60 }}>ID</th>
+                            <th align="left" style={{ width: 140 }}>Start</th>
+                            <th align="left" style={{ width: 140 }}>End</th>
+                            <th align="left">Note</th>
+                            <th align="left" style={{ width: 160 }}>Actions</th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        {vacations.map((v) => (
+                            <tr key={v.id} style={{ borderTop: "1px solid #eee" }}>
+                            <td>{v.id}</td>
+                            <td>{v.start_date}</td>
+                            <td>{v.end_date}</td>
+                            <td>{v.note ?? <span style={{ opacity: 0.6 }}>(none)</span>}</td>
+                            <td>
+                                <button onClick={() => startEditVacation(v)}>Edit</button>
+                                <button onClick={() => deleteVacation(v)} style={{ marginLeft: 8, color: "crimson" }}>
+                                Delete
+                                </button>
+                            </td>
+                            </tr>
+                        ))}
+                        {vacations.length === 0 && (
+                            <tr>
+                            <td colSpan={5} style={{ opacity: 0.7 }}>(No vacations yet)</td>
+                            </tr>
+                        )}
+                        </tbody>
+                    </table>
+                    </div>
+                )}
+            </Modal>
+
+            {err && <div style={{ color: "crimson", marginBottom: 12 }}>{err}</div>}
+            {loading && <div>Loading…</div>}
+
+            {/* Grouped by Department (collapsible) */}
+            {!loading && (
+                <>
+                    {departmentNames.length === 0 && (
+                    <div style={{ opacity: 0.7 }}>(No soldiers yet)</div>
+                    )}
+
+                    <div style={{ display: "grid", gap: 10 }}>
+                    {departmentNames.map((depName) => {
+                        const list = groups.get(depName)!; // exists by construction
+                        return (
+                        <details key={depName} style={{ border: "1px solid #ddd", borderRadius: 10, padding: "8px 12px" }}>
+                            <summary style={{ cursor: "pointer", userSelect: "none" }}>
+                                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                    <span style={{ fontWeight: 600 }}>{depName}</span>
+                                    <span style={{ opacity: 0.7, fontSize: 12 }}>({list.length})</span>
+                                    </div>
+                                    <div
+                                    onClick={(e) => e.preventDefault()} // prevent <summary> from toggling when clicking buttons
+                                    style={{ display: "flex", gap: 8 }}
+                                    >
+                                    {/* Find the department id by name (we already have departments in state) */}
+                                    <button
+                                        onClick={() => {
+                                        const dep = departments.find(d => (d.name ?? "").trim() === depName.trim()) || null;
+                                        if (!dep) { alert("Department not found (maybe just renamed). Try reloading."); return; }
+                                        startEditDept(dep.id, dep.name);
+                                        }}
+                                        title="Rename department"
+                                    >
+                                        Edit
+                                    </button>
+                                    <button
+                                        onClick={() => {
+                                        const dep = departments.find(d => (d.name ?? "").trim() === depName.trim()) || null;
+                                        if (!dep) { alert("Department not found (maybe just renamed). Try reloading."); return; }
+                                        deleteDept(dep.id, dep.name);
+                                        }}
+                                        style={{ color: "crimson" }}
+                                        title="Delete department"
+                                    >
+                                        Delete
+                                    </button>
+                                    </div>
+                                </div>
+                            </summary>
+
+                            {/* Inner table without Department column (since we are within that department) */}
+                            <div style={{ marginTop: 8 }}>
+                            <table width="100%" cellPadding={8} style={{ borderCollapse: "collapse" }}>
+                                <thead>
+                                <tr>
+                                    <th align="left" style={{ width: 60 }}>ID</th>
+                                    <th align="left">Name</th>
+                                    <th align="left" style={{ width: 320 }}>Roles</th>
+                                    <th align="left" style={{ width: 220 }}>Department</th>
+                                    <th align="left" style={{ width: 260 }}>Restrictions</th>
+                                    <th align="left" style={{ width: 160 }}>Vacations</th>
+                                    <th align="left" style={{ width: 180 }}>Actions</th>
+                                </tr>
+                                </thead>
+                                <tbody>
+                                {list.map((s) => {
+                                    const isEditing = editId === s.id;
+                                    return (
+                                    <tr key={s.id} style={{ borderTop: "1px solid #eee" }}>
+                                        <td>{s.id}</td>
+
+                                        {/* name */}
+                                        <td>
+                                        {isEditing ? (
+                                            <input
+                                            value={editName}
+                                            onChange={(e) => setEditName(e.target.value)}
+                                            style={{ width: "100%" }}
+                                            />
+                                        ) : (
+                                            s.name
+                                        )}
+                                        </td>
+
+                                        {/* roles */}
+                                        <td>
+                                        {isEditing ? (
+                                            <select
+                                            multiple
+                                            size={4}
+                                            value={editRoleIds.map(String)}
+                                            onChange={(e) => {
+                                                const selected = Array.from(e.target.selectedOptions).map((o) => Number(o.value));
+                                                setEditRoleIds(selected);
+                                            }}
+                                            style={{ width: "100%" }}
+                                            >
+                                            {roles.map((r) => (
+                                                <option key={r.id} value={r.id}>
+                                                {r.name}
+                                                </option>
+                                            ))}
+                                            </select>
+                                        ) : s.roles?.length ? (
+                                            s.roles.map((r) => r.name).join(", ")
+                                        ) : (
+                                            <span style={{ opacity: 0.6 }}>(none)</span>
+                                        )}
+                                        </td>
+
+                                        {/* department (always shown; editable when editing) */}
+                                        <td>
+                                            {isEditing ? (
+                                                <select
+                                                value={editDeptId}
+                                                onChange={(e) => setEditDeptId(e.target.value ? Number(e.target.value) : "")}
+                                                style={{ width: "100%" }}
+                                                >
+                                                <option value="">(no department)</option>
+                                                {departments.map((d) => (
+                                                    <option key={d.id} value={d.id}>
+                                                    {d.name}
+                                                    </option>
+                                                ))}
+                                                </select>
+                                            ) : (
+                                                s.department_name ?? <span style={{ opacity: 0.6 }}>(none)</span>
+                                            )}
+                                        </td>
+
+                                        {/* restrictions */}
+                                        <td>
+                                        {isEditing ? (
+                                            <select
+                                            multiple
+                                            size={3}
+                                            value={editRestrictions}
+                                            onChange={(e) => onMultiChangeStrings(e, setEditRestrictions)}
+                                            style={{ width: "100%" }}
+                                            >
+                                            {restrictionOptions.map((n) => (
+                                                <option key={n} value={n}>
+                                                {n}
+                                                </option>
+                                            ))}
+                                            </select>
+                                        ) : s.restrictions_tokens && s.restrictions_tokens.length ? (
+                                            s.restrictions_tokens.join(", ")
+                                        ) : (
+                                            <span style={{ opacity: 0.6 }}>(none)</span>
+                                        )}
+                                        </td>
+
+                                        {/* vacations cell */}
+                                        <td>
+                                            <button onClick={() => openVacations(s)}>Manage</button>
+                                            {/* If you expose a count on the soldier, show it here (optional): */}
+                                            {/* <span style={{ marginLeft: 8, opacity: 0.6 }}>({s.vacations_count ?? 0})</span> */}
+                                        </td>
+
+                                        {/* actions */}
+                                        <td>
+                                        {isEditing ? (
+                                            <>
+                                            <button onClick={() => saveEdit(s.id)}>Save</button>
+                                            <button onClick={cancelEdit} style={{ marginLeft: 8 }}>
+                                                Cancel
+                                            </button>
+                                            </>
+                                        ) : (
+                                            <>
+                                            <button onClick={() => startEdit(s)}>Edit</button>
+                                            <button
+                                                onClick={() => removeSoldier(s.id)}
+                                                style={{ marginLeft: 8, color: "crimson" }}
+                                            >
+                                                Delete
+                                            </button>
+                                            </>
+                                        )}
+                                        </td>
+                                    </tr>
+                                    );
+                                })}
+                                </tbody>
+                            </table>
+                            </div>
+                        </details>
+                        );
                     })}
-                    {soldiers.length === 0 && <tr><td colSpan={7} style={{ opacity:.7 }}>(No soldiers yet)</td></tr>}
-                </tbody>
-            </table>
-        )}
+                    </div>
+                </>
+            )}
+
         </div>
     );
 }
