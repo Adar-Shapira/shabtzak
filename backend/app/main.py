@@ -13,14 +13,6 @@ import os;
 
 app = FastAPI(title="Shabtzak API", version="0.1.0")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origin_regex=".*",
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 ENV = os.getenv("ENV", "dev").lower()
 raw = os.getenv("FRONTEND_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
 origins = [o.strip() for o in raw.split(",") if o.strip()]

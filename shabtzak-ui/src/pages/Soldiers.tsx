@@ -4,16 +4,28 @@ import { api } from "../api";
 import Modal from "../components/Modal";
 import { useDisclosure } from "../hooks/useDisclosure";
 
-type Role = { id: number; name: string; is_core: boolean };
-type Department = { id: number; name: string };
-type Mission = { id: number; name: string };
+type Role = { 
+    id: number; 
+    name: string; 
+    is_core: boolean
+ };
+
+type Department = { 
+    id: number; 
+    name: string 
+};
+
+type Mission = { 
+    id: number; 
+    name: string 
+};
 
 type Vacation = {
-  id: number;
-  soldier_id: number;
-  start_date: string; // ISO yyyy-mm-dd
-  end_date: string;   // ISO yyyy-mm-dd
-  note?: string | null;
+    id: number;
+    soldier_id: number;
+    start_date: string; // ISO yyyy-mm-dd
+    end_date: string;   // ISO yyyy-mm-dd
+    note?: string | null;
 };
 
 type Soldier = {
@@ -30,10 +42,6 @@ type Soldier = {
 function tokensToArray(s: string | undefined | null): string[] {
     if (!s) return [];
     return s.split(/[;,]/).map(x => x.trim()).filter(Boolean);
-}
-
-function getDeptName(s: Soldier): string {
-  return s.department_name?.trim() || "(no department)";
 }
 
 function byName(a: Soldier, b: Soldier) {
@@ -414,23 +422,32 @@ export default function SoldiersPage() {
         }
     }, [vacDlg.isOpen, vacSoldier?.id]);
 
-    // ↓ Add this block
-    const groups = useMemo(() => {
-        const m = new Map<string, Soldier[]>();
-        for (const s of soldiers) {
-            const dep = getDeptName(s);
-            if (!m.has(dep)) m.set(dep, []);
-            m.get(dep)!.push(s);
-        }
-        // sort soldiers inside each department by name
-        for (const [, arr] of m) arr.sort(byName);
-        return m;
-    }, [soldiers]);
+    // Build a department → soldiers map that also includes empty departments
+    const { groupsByDeptId, unassigned } = useMemo(() => {
+        const byId = new Map<number, Soldier[]>();
+        // Ensure every known department exists, even if empty
+        for (const d of departments) byId.set(d.id, []);
 
-    // Sorted department names A→Z
-    const departmentNames = useMemo(
-    () => Array.from(groups.keys()).sort((a, b) => a.localeCompare(b)),
-    [groups]
+        const none: Soldier[] = [];
+        for (const s of soldiers) {
+            if (s.department_id != null && byId.has(s.department_id)) {
+            byId.get(s.department_id)!.push(s);
+            } else {
+            // includes null/undefined or stale dept_id not in list
+            none.push(s);
+            }
+        }
+        // sort each department’s soldiers
+        for (const [, arr] of byId) arr.sort(byName);
+        none.sort(byName);
+
+        return { groupsByDeptId: byId, unassigned: none };
+        }, [departments, soldiers]);
+
+        // Sorted departments A→Z (drive UI from departments, not soldiers)
+        const sortedDepartments = useMemo(
+        () => [...departments].sort((a, b) => a.name.localeCompare(b.name)),
+        [departments]
     );
 
     // helpers for <select multiple>
@@ -767,56 +784,51 @@ export default function SoldiersPage() {
             {/* Grouped by Department (collapsible) */}
             {!loading && (
                 <>
-                    {departmentNames.length === 0 && (
-                    <div style={{ opacity: 0.7 }}>(No soldiers yet)</div>
+                    {!loading && departments.length === 0 && (
+                    <div style={{ opacity: 0.7 }}>(No departments yet)</div>
                     )}
 
                     <div style={{ display: "grid", gap: 10 }}>
-                    {departmentNames.map((depName) => {
-                        const list = groups.get(depName)!; // exists by construction
+                    {sortedDepartments.map((dep) => {
+                        const list = groupsByDeptId.get(dep.id) ?? [];
                         return (
-                        <details key={depName} style={{ border: "1px solid #ddd", borderRadius: 10, padding: "8px 12px" }}>
+                        <details
+                            key={dep.id}
+                            style={{ border: "1px solid #ddd", borderRadius: 10, padding: "8px 12px" }}
+                        >
                             <summary style={{ cursor: "pointer", userSelect: "none" }}>
-                                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-                                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                                    <span style={{ fontWeight: 600 }}>{depName}</span>
-                                    <span style={{ opacity: 0.7, fontSize: 12 }}>({list.length})</span>
-                                    </div>
-                                    <div
-                                    onClick={(e) => e.preventDefault()} // prevent <summary> from toggling when clicking buttons
-                                    style={{ display: "flex", gap: 8 }}
-                                    >
-                                    {/* Find the department id by name (we already have departments in state) */}
-                                    <button
-                                        onClick={() => {
-                                        const dep = departments.find(d => (d.name ?? "").trim() === depName.trim()) || null;
-                                        if (!dep) { alert("Department not found (maybe just renamed). Try reloading."); return; }
-                                        startEditDept(dep.id, dep.name);
-                                        }}
-                                        title="Rename department"
-                                    >
-                                        Edit
-                                    </button>
-                                    <button
-                                        onClick={() => {
-                                        const dep = departments.find(d => (d.name ?? "").trim() === depName.trim()) || null;
-                                        if (!dep) { alert("Department not found (maybe just renamed). Try reloading."); return; }
-                                        deleteDept(dep.id, dep.name);
-                                        }}
-                                        style={{ color: "crimson" }}
-                                        title="Delete department"
-                                    >
-                                        Delete
-                                    </button>
-                                    </div>
+                            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                <span style={{ fontWeight: 600 }}>{dep.name}</span>
+                                <span style={{ opacity: 0.7, fontSize: 12 }}>({list.length})</span>
                                 </div>
+                                <div
+                                onClick={(e) => e.preventDefault()} // avoid toggling <details> via buttons
+                                style={{ display: "flex", gap: 8 }}
+                                >
+                                <button onClick={() => startEditDept(dep.id, dep.name)} title="Rename department">
+                                    Edit
+                                </button>
+                                <button
+                                    onClick={() => deleteDept(dep.id, dep.name)}
+                                    style={{ color: "crimson" }}
+                                    title="Delete department"
+                                >
+                                    Delete
+                                </button>
+                                </div>
+                            </div>
                             </summary>
 
-                            {/* Inner table without Department column (since we are within that department) */}
                             <div style={{ marginTop: 8 }}>
-                            <table width="100%" cellPadding={8} style={{ borderCollapse: "collapse" }}>
+                            {list.length === 0 ? (
+                                <div style={{ border: "1px dashed #ddd", padding: 12, borderRadius: 8, opacity: 0.75 }}>
+                                No soldiers in this department yet.
+                                </div>
+                            ) : (
+                                <table width="100%" cellPadding={8} style={{ borderCollapse: "collapse" }}>
                                 <thead>
-                                <tr>
+                                    <tr>
                                     <th align="left" style={{ width: 60 }}>ID</th>
                                     <th align="left">Name</th>
                                     <th align="left" style={{ width: 320 }}>Roles</th>
@@ -824,135 +836,142 @@ export default function SoldiersPage() {
                                     <th align="left" style={{ width: 260 }}>Restrictions</th>
                                     <th align="left" style={{ width: 160 }}>Vacations</th>
                                     <th align="left" style={{ width: 180 }}>Actions</th>
-                                </tr>
+                                    </tr>
                                 </thead>
                                 <tbody>
-                                {list.map((s) => {
+                                    {list.map((s) => {
                                     const isEditing = editId === s.id;
                                     return (
-                                    <tr key={s.id} style={{ borderTop: "1px solid #eee" }}>
+                                        <tr key={s.id} style={{ borderTop: "1px solid #eee" }}>
                                         <td>{s.id}</td>
 
                                         {/* name */}
                                         <td>
-                                        {isEditing ? (
+                                            {isEditing ? (
                                             <input
-                                            value={editName}
-                                            onChange={(e) => setEditName(e.target.value)}
-                                            style={{ width: "100%" }}
+                                                value={editName}
+                                                onChange={(e) => setEditName(e.target.value)}
+                                                style={{ width: "100%" }}
                                             />
-                                        ) : (
+                                            ) : (
                                             s.name
-                                        )}
+                                            )}
                                         </td>
 
                                         {/* roles */}
                                         <td>
-                                        {isEditing ? (
+                                            {isEditing ? (
                                             <select
-                                            multiple
-                                            size={4}
-                                            value={editRoleIds.map(String)}
-                                            onChange={(e) => {
+                                                multiple
+                                                size={4}
+                                                value={editRoleIds.map(String)}
+                                                onChange={(e) => {
                                                 const selected = Array.from(e.target.selectedOptions).map((o) => Number(o.value));
                                                 setEditRoleIds(selected);
-                                            }}
-                                            style={{ width: "100%" }}
+                                                }}
+                                                style={{ width: "100%" }}
                                             >
-                                            {roles.map((r) => (
-                                                <option key={r.id} value={r.id}>
-                                                {r.name}
-                                                </option>
-                                            ))}
+                                                {roles.map((r) => (
+                                                <option key={r.id} value={r.id}>{r.name}</option>
+                                                ))}
                                             </select>
-                                        ) : s.roles?.length ? (
+                                            ) : s.roles?.length ? (
                                             s.roles.map((r) => r.name).join(", ")
-                                        ) : (
+                                            ) : (
                                             <span style={{ opacity: 0.6 }}>(none)</span>
-                                        )}
+                                            )}
                                         </td>
 
-                                        {/* department (always shown; editable when editing) */}
+                                        {/* department (editable when editing) */}
                                         <td>
                                             {isEditing ? (
-                                                <select
+                                            <select
                                                 value={editDeptId}
                                                 onChange={(e) => setEditDeptId(e.target.value ? Number(e.target.value) : "")}
                                                 style={{ width: "100%" }}
-                                                >
+                                            >
                                                 <option value="">(no department)</option>
                                                 {departments.map((d) => (
-                                                    <option key={d.id} value={d.id}>
-                                                    {d.name}
-                                                    </option>
+                                                <option key={d.id} value={d.id}>{d.name}</option>
                                                 ))}
-                                                </select>
+                                            </select>
                                             ) : (
-                                                s.department_name ?? <span style={{ opacity: 0.6 }}>(none)</span>
+                                            s.department_name ?? <span style={{ opacity: 0.6 }}>(none)</span>
                                             )}
                                         </td>
 
                                         {/* restrictions */}
                                         <td>
-                                        {isEditing ? (
+                                            {isEditing ? (
                                             <select
-                                            multiple
-                                            size={3}
-                                            value={editRestrictions}
-                                            onChange={(e) => onMultiChangeStrings(e, setEditRestrictions)}
-                                            style={{ width: "100%" }}
+                                                multiple
+                                                size={3}
+                                                value={editRestrictions}
+                                                onChange={(e) => onMultiChangeStrings(e, setEditRestrictions)}
+                                                style={{ width: "100%" }}
                                             >
-                                            {restrictionOptions.map((n) => (
-                                                <option key={n} value={n}>
-                                                {n}
-                                                </option>
-                                            ))}
+                                                {restrictionOptions.map((n) => (
+                                                <option key={n} value={n}>{n}</option>
+                                                ))}
                                             </select>
-                                        ) : s.restrictions_tokens && s.restrictions_tokens.length ? (
+                                            ) : s.restrictions_tokens && s.restrictions_tokens.length ? (
                                             s.restrictions_tokens.join(", ")
-                                        ) : (
+                                            ) : (
                                             <span style={{ opacity: 0.6 }}>(none)</span>
-                                        )}
+                                            )}
                                         </td>
 
-                                        {/* vacations cell */}
+                                        {/* vacations */}
                                         <td>
                                             <button onClick={() => openVacations(s)}>Manage</button>
-                                            {/* If you expose a count on the soldier, show it here (optional): */}
-                                            {/* <span style={{ marginLeft: 8, opacity: 0.6 }}>({s.vacations_count ?? 0})</span> */}
                                         </td>
 
                                         {/* actions */}
                                         <td>
-                                        {isEditing ? (
+                                            {isEditing ? (
                                             <>
-                                            <button onClick={() => saveEdit(s.id)}>Save</button>
-                                            <button onClick={cancelEdit} style={{ marginLeft: 8 }}>
-                                                Cancel
-                                            </button>
+                                                <button onClick={() => saveEdit(s.id)}>Save</button>
+                                                <button onClick={cancelEdit} style={{ marginLeft: 8 }}>Cancel</button>
                                             </>
-                                        ) : (
+                                            ) : (
                                             <>
-                                            <button onClick={() => startEdit(s)}>Edit</button>
-                                            <button
+                                                <button onClick={() => startEdit(s)}>Edit</button>
+                                                <button
                                                 onClick={() => removeSoldier(s.id)}
                                                 style={{ marginLeft: 8, color: "crimson" }}
-                                            >
+                                                >
                                                 Delete
-                                            </button>
+                                                </button>
                                             </>
-                                        )}
+                                            )}
                                         </td>
-                                    </tr>
+                                        </tr>
                                     );
-                                })}
+                                    })}
                                 </tbody>
-                            </table>
+                                </table>
+                            )}
                             </div>
                         </details>
                         );
                     })}
                     </div>
+
+                    {/* Optional: Unassigned section */}
+                    {unassigned.length > 0 && (
+                    <details style={{ border: "1px solid #ddd", borderRadius: 10, padding: "8px 12px", marginTop: 10 }}>
+                        <summary style={{ cursor: "pointer", userSelect: "none" }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <span style={{ fontWeight: 600 }}>Unassigned</span>
+                            <span style={{ opacity: 0.7, fontSize: 12 }}>({unassigned.length})</span>
+                            </div>
+                        </div>
+                        </summary>
+                        {/* reuse the same table markup, mapping over `unassigned` */}
+                        {/* ... you can copy the table above and replace `list` with `unassigned` */}
+                    </details>
+                    )}
                 </>
             )}
 
