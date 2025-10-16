@@ -1,3 +1,4 @@
+# backend/app/routers/soldiers.py
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, field_validator
 from typing import Optional, List, Union
@@ -103,33 +104,50 @@ def update_soldier(soldier_id: int, payload: SoldierUpdate):
         if not soldier:
             raise HTTPException(status_code=404, detail="Soldier not found")
 
+        # Build field updates
         values = {}
         if payload.name is not None:
             values["name"] = payload.name.strip()
+
         if payload.department_id is not None:
             if payload.department_id == 0:
                 values["department_id"] = None
             else:
-                if s.execute(select(Department.id).where(Department.id == payload.department_id)).scalar_one_or_none() is None:
+                exists = s.execute(
+                    select(Department.id).where(Department.id == payload.department_id)
+                ).scalar_one_or_none()
+                if exists is None:
                     raise HTTPException(status_code=400, detail="department_id does not exist")
                 values["department_id"] = payload.department_id
+
         if payload.restrictions is not None:
             values["restrictions"] = _normalize_restrictions(payload.restrictions)
-        if values:
-            s.execute(update(Soldier).where(Soldier.id == soldier_id).values(**values))
 
-        if payload.role_ids is not None:
-            # validate all first
-            for rid in payload.role_ids:
-                if s.execute(select(Role.id).where(Role.id == rid)).scalar_one_or_none() is None:
-                    raise HTTPException(status_code=400, detail=f"role_id {rid} does not exist")
-            # replace set
-            s.execute(delete(SoldierRole).where(SoldierRole.soldier_id == soldier_id))
-            for rid in payload.role_ids:
-                s.execute(insert(SoldierRole).values(soldier_id=soldier_id, role_id=rid))
+        try:
+            # Apply simple column updates first (if any)
+            if values:
+                s.execute(update(Soldier).where(Soldier.id == soldier_id).values(**values))
 
-        s.commit()
-        return {"id": soldier_id}
+            # Replace roles if provided
+            if payload.role_ids is not None:
+                # validate all role IDs exist
+                for rid in payload.role_ids:
+                    ok = s.execute(select(Role.id).where(Role.id == rid)).scalar_one_or_none()
+                    if ok is None:
+                        raise HTTPException(status_code=400, detail=f"role_id {rid} does not exist")
+
+                # replace set
+                s.execute(delete(SoldierRole).where(SoldierRole.soldier_id == soldier_id))
+                for rid in payload.role_ids:
+                    s.execute(insert(SoldierRole).values(soldier_id=soldier_id, role_id=rid))
+
+            s.commit()
+            return {"id": soldier_id}
+
+        except IntegrityError:
+            s.rollback()
+            # most likely unique constraint on Soldier.name
+            raise HTTPException(status_code=409, detail="Soldier name already exists")
 
 @router.delete("/{soldier_id}", status_code=204)
 def delete_soldier(soldier_id: int):

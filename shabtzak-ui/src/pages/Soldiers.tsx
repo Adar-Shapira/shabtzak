@@ -1,3 +1,4 @@
+// shabtzak-ui/src/pages/Soldiers.tsx
 import { useEffect, useMemo, useState } from "react";
 import type React from "react";
 import { api } from "../api";

@@ -1,7 +1,7 @@
 services:
   db:
     image: postgres:16-alpine
-    container_name: shabtzak_db
+    #container_name: shabtzak_db
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -18,7 +18,7 @@ services:
 
   api:
     build: ./backend
-    container_name: shabtzak_api
+    #container_name: shabtzak_api
     env_file: .env
     environment:
       - DATABASE_URL=${DATABASE_URL}

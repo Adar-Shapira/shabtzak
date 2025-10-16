@@ -1,3 +1,4 @@
+// shabtzak-ui/src/pages/Departments.tsx
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import Modal from "../components/Modal";
@@ -10,7 +11,6 @@ export default function DepartmentsPage() {
   const [err, setErr] = useState<string|null>(null);
   const [loading, setLoading] = useState(false);
 
-  const [newName, setNewName] = useState("");
   const [editId, setEditId] = useState<number|null>(null);
   const [editName, setEditName] = useState("");
 
@@ -28,7 +28,7 @@ export default function DepartmentsPage() {
   const createRow = async (e:React.FormEvent) => {
     e.preventDefault();
     try { 
-      await api.post("/departments", {name: newName.trim()});
+      await api.post("/departments", { name: newDeptName.trim() });
       setNewDeptName("");
       addDlg.close();
       await load();

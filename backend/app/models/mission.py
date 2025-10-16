@@ -1,19 +1,34 @@
-from datetime import datetime, time, timezone
-from sqlalchemy import String, Integer, Time, DateTime
-from sqlalchemy.orm import Mapped, mapped_column
+# backend/app/models/mission.py
+from datetime import time
+from sqlalchemy import Column, Integer, String, Time
+from sqlalchemy.orm import relationship
+from sqlalchemy.ext.hybrid import hybrid_property
 from app.db import Base
 
 class Mission(Base):
     __tablename__ = "missions"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False, unique=True)
+    start_hour = Column(Time, nullable=True)
+    end_hour   = Column(Time, nullable=True)
+    required_soldiers   = Column(Integer, nullable=False, default=0)
+    required_commanders = Column(Integer, nullable=False, default=0)
+    required_officers   = Column(Integer, nullable=False, default=0)
+    required_drivers    = Column(Integer, nullable=False, default=0)
 
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
-    start_hour: Mapped[time] = mapped_column(Time, nullable=False)
-    end_hour: Mapped[time] = mapped_column(Time, nullable=False)
-    required_soldiers: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    required_commanders: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    required_officers: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    required_drivers: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    slots = relationship(
+        "MissionSlot",
+        back_populates="mission",
+        cascade="all, delete-orphan",
+        lazy="selectin",
     )
+
+    # bridge for schema output
+    @hybrid_property
+    def start_time(self) -> time | None:
+        return self.start_hour
+
+    @hybrid_property
+    def end_time(self) -> time | None:
+        return self.end_hour
+

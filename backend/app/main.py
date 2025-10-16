@@ -1,59 +1,45 @@
+# backend/app/main.py
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from .db import healthcheck
-from .routers.roles import router as roles_router
-from .routers.missions import router as missions_router
-from .routers.soldiers import router as soldiers_router
-from .routers.assignments import router as assignments_router
-from .routers.vacations import router as vacations_router
-#from .routers.soldiers_patch import router as soldiers_patch_router
-from .routers.planning import router as planning_router
-from .routers.departments import router as departments_router
-import os;
 
-app = FastAPI(title="Shabtzak API", version="0.1.0")
+from app.db import Base, engine, healthcheck
+# Import models so they register on Base.metadata
+import app.models  # noqa: F401 (imports __all__ which imports every model)
 
-ENV = os.getenv("ENV", "dev").lower()
-raw = os.getenv("FRONTEND_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
-origins = [o.strip() for o in raw.split(",") if o.strip()]
+# Routers
+from app.routers.roles import router as roles_router
+from app.routers.departments import router as departments_router
+from app.routers.soldiers import router as soldiers_router
+from app.routers.missions import router as missions_router
 
-if ENV == "dev":
-    # convenient wildcard during development
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origin_regex=".*",
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-else:
-    # explicit origins in prod
+app = FastAPI(title="Shabtzak API")
+
+# CORS
+origins = [o.strip() for o in os.getenv("FRONTEND_ORIGINS", "").split(",") if o.strip()]
+if origins:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origins,
-        allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
 
+# Startup: create tables if they don't exist
+@app.on_event("startup")
+def on_startup() -> None:
+    # sanity probe the DB
+    healthcheck()
+    # create tables (safe if already there)
+    Base.metadata.create_all(bind=engine)
 
-@app.get("/")
-def root():
-    return {"message": "Shabtzak API is running"}
+# Simple health endpoint (optional, but handy)
+@app.get("/health")
+def health():
+    return healthcheck()
 
-@app.get("/status")
-def status():
-    try:
-        healthcheck()
-        return {"db": "ok"}
-    except Exception as e:
-        return {"db": "error", "detail": str(e)}
-
+# Routers
 app.include_router(roles_router)
-app.include_router(missions_router)
-app.include_router(soldiers_router)
-app.include_router(assignments_router)
-app.include_router(vacations_router)
-#app.include_router(soldiers_patch_router)
-app.include_router(planning_router)
 app.include_router(departments_router)
+app.include_router(soldiers_router)
+app.include_router(missions_router)
