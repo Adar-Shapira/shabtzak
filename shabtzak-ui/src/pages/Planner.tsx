@@ -1,11 +1,11 @@
-// src/pages/Planner.tsx
+// shabtzak-ui/src/pages/Planner.tsx
 import { useMemo, useState } from "react";
 import { api } from "../api";
 
 type PlanResultItem = {
   mission: { id: number; name: string };
-  created_count?: number;
-  error?: unknown;
+  created_count?: number | null;
+  error?: string | null;
 };
 
 type PlanFillResponse = {
@@ -13,199 +13,178 @@ type PlanFillResponse = {
   results: PlanResultItem[];
 };
 
-type RosterResp = {
-  mission: { id: number; name: string; start_at: string; end_at: string };
-  assigned: { id: number; soldier_id: number; name: string; role: string | null }[];
-  still_needed: { officers: number; commanders: number; drivers: number; soldiers: number };
+type RosterItem = {
+  id: number;
+  soldier_id: number;
+  soldier_name: string;
+  start_at: string; // ISO
+  end_at: string;   // ISO
 };
 
-export default function PlannerPage() {
+type RosterResp = {
+  mission: { id: number; name: string };
+  day: string;
+  items: RosterItem[];
+};
+
+export default function Planner() {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
-  const [day, setDay] = useState(today);
-  const [acceptPartial, setAcceptPartial] = useState(true);
-  const [maxPerMission, setMaxPerMission] = useState<string>("");
+  const [day, setDay] = useState<string>(today);
+  const [busy, setBusy] = useState(false);
+  const [results, setResults] = useState<PlanResultItem[] | null>(null);
 
-  const [running, setRunning] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<PlanFillResponse | null>(null);
-
-  // roster viewer state
-  const [rosterLoading, setRosterLoading] = useState(false);
-  const [rosterErr, setRosterErr] = useState<string | null>(null);
-  const [roster, setRoster] = useState<RosterResp | null>(null);
   const [rosterMissionId, setRosterMissionId] = useState<number | null>(null);
+  const [roster, setRoster] = useState<RosterResp | null>(null);
+  const [rosterBusy, setRosterBusy] = useState(false);
 
-  const runPlanner = async () => {
-    setRunning(true);
-    setError(null);
-    setResult(null);
-    setRoster(null);
-    setRosterMissionId(null);
-
+  async function runPlanner() {
+    setBusy(true);
+    setResults(null);
     try {
-      const payload: any = {
-        day,
-        accept_partial: acceptPartial,
-      };
-      if (maxPerMission.trim() !== "") {
-        payload.max_per_mission = Number(maxPerMission);
-      }
-
-      const res = await api.post<PlanFillResponse>("/plan/fill", payload);
-      setResult(res.data);
+      const { data } = await api.post<PlanFillResponse>("/plan/fill", { day });
+      setResults(data.results);
     } catch (e: any) {
-      const d = e?.response?.data?.detail;
-      setError(typeof d === "string" ? d : JSON.stringify(d ?? "Planner failed"));
+      const msg =
+        e?.response?.data?.detail ??
+        e?.message ??
+        "Planner failed";
+      alert(String(msg));
     } finally {
-      setRunning(false);
+      setBusy(false);
     }
-  };
+  }
 
-  const viewRoster = async (missionId: number) => {
-    setRosterLoading(true);
-    setRosterErr(null);
+  async function viewRoster(missionId: number) {
+    setRosterBusy(true);
     setRoster(null);
     setRosterMissionId(missionId);
     try {
-      const res = await api.get<RosterResp>("/assignments/roster", {
+      const { data } = await api.get<RosterResp>("/assignments/roster", {
         params: { mission_id: missionId, day },
       });
-      setRoster(res.data);
+      setRoster(data);
     } catch (e: any) {
       const d = e?.response?.data?.detail;
-      setRosterErr(typeof d === "string" ? d : JSON.stringify(d ?? "Failed to load roster"));
+      alert(typeof d === "string" ? d : "Failed to load roster");
     } finally {
-      setRosterLoading(false);
+      setRosterBusy(false);
     }
-  };
+  }
 
-  const clearRoster = async (missionId: number) => {
-    // POST /assignments/clear { mission_id, day }
+  async function clearRoster(missionId: number) {
+    if (!confirm("Delete all assignments for this mission on the selected day?")) {
+      return;
+    }
     try {
       await api.post("/assignments/clear", { mission_id: missionId, day });
-      // refresh roster if open
       if (rosterMissionId === missionId) {
         await viewRoster(missionId);
       }
+      // refresh results view numbers if present
+      await runPlannerPreview(); // optional soft refresh
     } catch (e: any) {
       const d = e?.response?.data?.detail;
       alert(typeof d === "string" ? d : "Failed to clear roster");
     }
-  };
+  }
+
+  async function runPlannerPreview() {
+    // optional: call /plan/fill but ignore DB writes — not implemented on server.
+    // For now, just do nothing. This is here so the UI code path remains clean.
+    return;
+  }
 
   return (
-    <div style={{ maxWidth: 1000, margin: "24px auto", padding: 16, fontFamily: "sans-serif" }}>
-      <h1>Planner</h1>
+    <div className="p-4 space-y-4">
+      <h1 className="text-xl font-semibold">Planner</h1>
 
-      <section style={{ marginBottom: 16 }}>
-        <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-          <div>
-            <label style={{ display: "block", fontSize: 12, color: "#555" }}>Day</label>
-            <input type="date" value={day} onChange={(e) => setDay(e.target.value)} />
-          </div>
-          <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <input
-              type="checkbox"
-              checked={acceptPartial}
-              onChange={(e) => setAcceptPartial(e.target.checked)}
-            />
-            Accept partial
-          </label>
-          <div>
-            <label style={{ display: "block", fontSize: 12, color: "#555" }}>Max per mission (optional)</label>
-            <input
-              type="number"
-              min={0}
-              value={maxPerMission}
-              onChange={(e) => setMaxPerMission(e.target.value)}
-              placeholder="e.g. 3"
-              style={{ width: 120 }}
-            />
-          </div>
-          <button onClick={runPlanner} disabled={running}>
-            {running ? "Planning…" : "Run Planner"}
-          </button>
-        </div>
-      </section>
+      <div className="flex items-center gap-3">
+        <label className="text-sm">Day</label>
+        <input
+          type="date"
+          value={day}
+          onChange={(e) => setDay(e.target.value)}
+          className="border rounded px-2 py-1"
+        />
+        <button
+          onClick={runPlanner}
+          disabled={busy}
+          className="border rounded px-3 py-1 hover:bg-gray-50 disabled:opacity-50"
+        >
+          {busy ? "Planning…" : "Fill plan for day"}
+        </button>
+      </div>
 
-      {error && <div style={{ color: "crimson", marginBottom: 12 }}>{error}</div>}
-
-      {/* Results summary */}
-      {result && (
-        <section style={{ marginTop: 8 }}>
-          <h2>Results for {result.day}</h2>
-          {result.results.length === 0 ? (
-            <div style={{ opacity: 0.7 }}>No missions found.</div>
-          ) : (
-            <table width="100%" cellPadding={8} style={{ borderCollapse: "collapse" }}>
-              <thead>
-                <tr>
-                  <th align="left">Mission</th>
-                  <th align="left">Outcome</th>
-                  <th align="left">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {result.results.map((r, i) => (
-                  <tr key={i} style={{ borderTop: "1px solid #ddd" }}>
-                    <td>{r.mission.name}</td>
-                    <td>
-                      {"created_count" in r
-                        ? `Created ${r.created_count} assignment(s)`
-                        : r.error
-                          ? (typeof r.error === "string" ? r.error : JSON.stringify(r.error))
-                          : "—"}
-                    </td>
-                    <td style={{ display: "flex", gap: 8 }}>
-                      <button onClick={() => viewRoster(r.mission.id)}>View roster</button>
-                      <button onClick={() => clearRoster(r.mission.id)}>Clear roster</button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </section>
-      )}
-
-      {/* Roster viewer */}
-      {rosterMissionId && (
-        <section style={{ marginTop: 24, borderTop: "1px solid #eee", paddingTop: 16 }}>
-          <h2>
-            Roster — {roster?.mission?.name ?? `Mission #${rosterMissionId}`} ({day})
-          </h2>
-          {rosterLoading && <div>Loading roster…</div>}
-          {rosterErr && <div style={{ color: "crimson", marginBottom: 8 }}>{rosterErr}</div>}
-          {roster && (
-            <>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, maxWidth: 640, marginBottom: 12 }}>
-                <div style={{ border: "1px solid #ddd", borderRadius: 8, padding: 12 }}>
-                  <h3 style={{ marginTop: 0 }}>Assigned</h3>
-                  {roster.assigned.length === 0 ? (
-                    <div style={{ opacity: 0.7 }}>(none)</div>
+      {results && (
+        <div className="space-y-2">
+          <h2 className="font-medium">Results</h2>
+          <div className="border rounded divide-y">
+            {results.map((r) => (
+              <div key={r.mission.id} className="p-2 flex items-center justify-between gap-2">
+                <div className="truncate">
+                  <div className="font-medium">{r.mission.name}</div>
+                  {r.error ? (
+                    <div className="text-sm text-red-600">Error: {r.error}</div>
                   ) : (
-                    <ul>
-                      {roster.assigned.map(a => (
-                        <li key={a.id}>
-                          {a.name} {a.role ? `— ${a.role}` : ""}
-                        </li>
-                      ))}
-                    </ul>
+                    <div className="text-sm text-gray-600">
+                      Created assignments: {r.created_count ?? 0}
+                    </div>
                   )}
                 </div>
-                <div style={{ border: "1px solid #ddd", borderRadius: 8, padding: 12 }}>
-                  <h3 style={{ marginTop: 0 }}>Still Needed</h3>
-                  <ul>
-                    <li>Officers: {roster.still_needed.officers}</li>
-                    <li>Commanders: {roster.still_needed.commanders}</li>
-                    <li>Drivers: {roster.still_needed.drivers}</li>
-                    <li>Soldiers: {roster.still_needed.soldiers}</li>
-                  </ul>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => viewRoster(r.mission.id)}
+                    className="border rounded px-2 py-1 hover:bg-gray-50"
+                  >
+                    View roster
+                  </button>
+                  <button
+                    onClick={() => clearRoster(r.mission.id)}
+                    className="border rounded px-2 py-1 hover:bg-gray-50"
+                  >
+                    Clear day
+                  </button>
                 </div>
               </div>
-            </>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {rosterMissionId && (
+        <div className="space-y-2">
+          <h2 className="font-medium">Roster</h2>
+          {rosterBusy && <div className="text-sm text-gray-500">Loading roster…</div>}
+          {!rosterBusy && roster && (
+            <div className="border rounded overflow-x-auto">
+              <table className="min-w-[600px] w-full text-sm">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="text-left p-2">Soldier</th>
+                    <th className="text-left p-2">Start</th>
+                    <th className="text-left p-2">End</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {roster.items.length === 0 && (
+                    <tr>
+                      <td className="p-2 text-gray-500" colSpan={3}>
+                        No assignments for {roster.mission.name} on {roster.day}
+                      </td>
+                    </tr>
+                  )}
+                  {roster.items.map((it) => (
+                    <tr key={it.id} className="border-t">
+                      <td className="p-2">{it.soldier_name}</td>
+                      <td className="p-2">{new Date(it.start_at).toLocaleString()}</td>
+                      <td className="p-2">{new Date(it.end_at).toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
-        </section>
+        </div>
       )}
     </div>
   );
