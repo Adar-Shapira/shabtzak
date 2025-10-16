@@ -2,22 +2,160 @@
 import { Fragment, useEffect, useState } from "react";
 import { api } from "../api";
 import Modal from "../components/Modal";
+import MissionSlotsModal from "../components/MissionSlotsModal";
 import { useDisclosure } from "../hooks/useDisclosure";
-import { listMissionSlots, createMissionSlot, deleteMissionSlot, type MissionSlot } from "../api";
+import {
+  listMissionSlots,
+  createMissionSlot,
+  deleteMissionSlot,
+  type MissionSlot,
+  getMissionRequirements,
+  putMissionRequirements,
+  type MissionRequirementsBatch,
+} from "../api";
 
+// Minimal Mission type for this page
 type Mission = {
   id: number;
   name: string;
-  start_time?: string | null;
-  end_time?: string | null;
-  required_soldiers: number;
-  required_commanders: number;
-  required_officers: number;
-  required_drivers: number;
+  total_needed?: number | null;
 };
+
+// For role selector in requirements editor
+type Role = {
+  id: number;
+  name: string;
+};
+
+/* ------------------------------ Requirements ------------------------------ */
+
+function MissionRequirementsEditor({ missionId, roles }: { missionId: number; roles: Role[] }) {
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [total, setTotal] = useState<number | "">("");
+  const [rows, setRows] = useState<{ role_id: number | ""; count: number | "" }[]>([]);
+
+  const sum = rows.reduce((acc, r) => acc + (Number(r.count) || 0), 0);
+
+  const load = async () => {
+    setLoading(true);
+    setErr(null);
+    try {
+      const data: MissionRequirementsBatch = await getMissionRequirements(missionId);
+      setTotal(data.total_needed ?? "");
+      setRows(
+        data.requirements.map((r: { role_id: number; count: number }) => ({
+          role_id: r.role_id,
+          count: r.count,
+        }))
+      );
+    } catch (e: any) {
+      setErr(e?.message ?? "Failed to load requirements");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [missionId]);
+
+  const addRow = () => setRows((prev) => [...prev, { role_id: "", count: "" }]);
+  const removeRow = (idx: number) => setRows((prev) => prev.filter((_, i) => i !== idx));
+  const updateRow = (idx: number, patch: Partial<{ role_id: number | ""; count: number | "" }>) =>
+    setRows((prev) => prev.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
+
+  const save = async () => {
+    setLoading(true);
+    setErr(null);
+    try {
+      const clean = rows
+        .filter((r) => r.role_id !== "" && r.count !== "")
+        .map((r) => ({ role_id: Number(r.role_id), count: Number(r.count) }));
+      await putMissionRequirements(missionId, {
+        total_needed: total === "" ? null : Number(total),
+        requirements: clean,
+      });
+      await load();
+    } catch (e: any) {
+      setErr(e?.response?.data?.detail ?? e?.message ?? "Failed to save requirements");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div style={{ marginTop: 12, border: "1px solid #e5e7eb", borderRadius: 8, padding: 12 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+        <strong>Requirements</strong>
+        <span style={{ fontSize: 12, opacity: 0.8 }}>
+          sum: {sum}
+          {typeof total === "number" ? ` / ${total}` : ""}
+        </span>
+      </div>
+
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
+        <label style={{ fontSize: 14, width: 120 }}>Total needed:</label>
+        <input
+          type="number"
+          min={1}
+          value={total}
+          onChange={(e) => setTotal(e.target.value === "" ? "" : Number(e.target.value))}
+          style={{ border: "1px solid #ddd", borderRadius: 6, padding: "4px 8px", width: 120 }}
+          placeholder="e.g. 8"
+        />
+        {typeof total === "number" && sum > total && (
+          <span style={{ fontSize: 12, color: "crimson" }}>Sum exceeds total</span>
+        )}
+      </div>
+
+      <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
+        {rows.map((row, idx) => (
+          <div key={idx} style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <select
+              value={row.role_id}
+              onChange={(e) => updateRow(idx, { role_id: e.target.value === "" ? "" : Number(e.target.value) })}
+              style={{ border: "1px solid #ddd", borderRadius: 6, padding: "4px 8px" }}
+            >
+              <option value="">Select role…</option>
+              {roles.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.name}
+                </option>
+              ))}
+            </select>
+            <input
+              type="number"
+              min={1}
+              value={row.count}
+              onChange={(e) => updateRow(idx, { count: e.target.value === "" ? "" : Number(e.target.value) })}
+              placeholder="count"
+              style={{ border: "1px solid #ddd", borderRadius: 6, padding: "4px 8px", width: 100 }}
+            />
+            <button onClick={() => removeRow(idx)} style={{ color: "crimson" }}>
+              Remove
+            </button>
+          </div>
+        ))}
+        <button onClick={addRow}>+ Add role</button>
+      </div>
+
+      <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
+        <button onClick={save} disabled={loading}>
+          {loading ? "Saving…" : "Save"}
+        </button>
+        {err && <span style={{ color: "crimson", fontSize: 12 }}>{err}</span>}
+      </div>
+    </div>
+  );
+}
+
+/* --------------------------------- Page ---------------------------------- */
 
 export default function MissionsPage() {
   const [rows, setRows] = useState<Mission[]>([]);
+  const [roles, setRoles] = useState<Role[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -31,15 +169,18 @@ export default function MissionsPage() {
   // create modal
   const addDlg = useDisclosure(false);
   const [newName, setNewName] = useState("");
-  const [reqSoldiers, setReqSoldiers] = useState(4);
-  const [reqCommanders, setReqCommanders] = useState(1);
-  const [reqOfficers, setReqOfficers] = useState(0);
-  const [reqDrivers, setReqDrivers] = useState(1);
+  const [newTotal, setNewTotal] = useState<number | "">("");
+
+  const [slotsModal, setSlotsModal] = useState<{ open: boolean; id: number | null; name: string }>(
+    { open: false, id: null, name: "" }
+  );
 
   // edit
   const [editId, setEditId] = useState<number | null>(null);
   const [eName, setEName] = useState("");
-  const [eReq, setEReq] = useState({ soldiers: 0, commanders: 0, officers: 0, drivers: 0 });
+  const [eTotal, setETotal] = useState<number | "">("");
+
+  const timeWithSeconds = (t: string) => (t.length === 5 ? `${t}:00` : t);
 
   const load = async () => {
     setLoading(true);
@@ -53,11 +194,23 @@ export default function MissionsPage() {
       setLoading(false);
     }
   };
+
+  // missions
   useEffect(() => {
     load();
   }, []);
 
-  const timeWithSeconds = (t: string) => (t.length === 5 ? `${t}:00` : t);
+  // roles for requirements editor
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await api.get<Role[]>("/roles");
+        setRoles(r.data);
+      } catch {
+        setRoles([]);
+      }
+    })();
+  }, []);
 
   const loadSlots = async (missionId: number) => {
     setError("");
@@ -111,17 +264,10 @@ export default function MissionsPage() {
     try {
       await api.post("/missions", {
         name: newName.trim(),
-        // no start/end at mission level
-        required_soldiers: reqSoldiers,
-        required_commanders: reqCommanders,
-        required_officers: reqOfficers,
-        required_drivers: reqDrivers,
+        total_needed: newTotal === "" ? null : newTotal,
       });
       setNewName("");
-      setReqSoldiers(4);
-      setReqCommanders(1);
-      setReqOfficers(0);
-      setReqDrivers(1);
+      setNewTotal("");
       addDlg.close();
       await load();
     } catch (e: any) {
@@ -132,23 +278,16 @@ export default function MissionsPage() {
   const startEdit = (m: Mission) => {
     setEditId(m.id);
     setEName(m.name);
-    setEReq({
-      soldiers: m.required_soldiers,
-      commanders: m.required_commanders,
-      officers: m.required_officers,
-      drivers: m.required_drivers,
-    });
+    setETotal(m.total_needed ?? "");
   };
+
   const cancelEdit = () => setEditId(null);
 
   const saveEdit = async (id: number) => {
     try {
       await api.patch(`/missions/${id}`, {
         name: eName.trim(),
-        required_soldiers: eReq.soldiers,
-        required_commanders: eReq.commanders,
-        required_officers: eReq.officers,
-        required_drivers: eReq.drivers,
+        total_needed: eTotal === "" ? null : eTotal,
       });
       setEditId(null);
       await load();
@@ -182,27 +321,22 @@ export default function MissionsPage() {
       </div>
 
       <Modal open={addDlg.isOpen} onClose={addDlg.close} title="Add Mission" maxWidth={640}>
-        <form onSubmit={createRow} style={{ display: "grid", gridTemplateColumns: "2fr repeat(4,1fr)", gap: 10 }}>
+        <form onSubmit={createRow} style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 10 }}>
           <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Mission name" required />
           <label>
-            Soldiers
-            <input type="number" value={reqSoldiers} min={0} onChange={(e) => setReqSoldiers(+e.target.value || 0)} />
-          </label>
-          <label>
-            Commanders
-            <input type="number" value={reqCommanders} min={0} onChange={(e) => setReqCommanders(+e.target.value || 0)} />
-          </label>
-          <label>
-            Officers
-            <input type="number" value={reqOfficers} min={0} onChange={(e) => setReqOfficers(+e.target.value || 0)} />
-          </label>
-          <label>
-            Drivers
-            <input type="number" value={reqDrivers} min={0} onChange={(e) => setReqDrivers(+e.target.value || 0)} />
+            Total needed
+            <input
+              type="number"
+              min={1}
+              value={newTotal === "" ? "" : newTotal}
+              onChange={(e) => setNewTotal(e.target.value === "" ? "" : +e.target.value)}
+            />
           </label>
 
           <div style={{ gridColumn: "1 / -1", display: "flex", gap: 8, justifyContent: "flex-end" }}>
-            <button type="button" onClick={addDlg.close}>Cancel</button>
+            <button type="button" onClick={addDlg.close}>
+              Cancel
+            </button>
             <button type="submit">Add</button>
           </div>
         </form>
@@ -211,14 +345,11 @@ export default function MissionsPage() {
       {err && <div style={{ color: "crimson" }}>{err}</div>}
       {loading && <div>Loading…</div>}
 
-      <table className="tbl-missions" width="100%" cellPadding={8} style={{ borderCollapse: "collapse" }}>
+      <table className="tbl-missions" width="100%" cellPadding={8} style={{ borderCollapse: "collapse", width: "100%" }}>
         <thead>
           <tr>
             <th align="left">Name</th>
-            <th>Off</th>
-            <th>Com</th>
-            <th>Drv</th>
-            <th>Sol</th>
+            <th align="center">Total</th>
             <th>Actions</th>
           </tr>
         </thead>
@@ -229,60 +360,32 @@ export default function MissionsPage() {
             return (
               <Fragment key={m.id}>
                 <tr style={{ borderTop: "1px solid #ddd" }}>
-                  <td>{editing ? <input value={eName} onChange={(e) => setEName(e.target.value)} /> : m.name}</td>
-                  <td align="center">
+                  <td>
                     {editing ? (
-                      <input
-                        type="number"
-                        min={0}
-                        value={eReq.officers}
-                        onChange={(e) => setEReq({ ...eReq, officers: +e.target.value })}
-                      />
+                      <input value={eName} onChange={(e) => setEName(e.target.value)} />
                     ) : (
-                      m.required_officers
+                      m.name
                     )}
                   </td>
                   <td align="center">
                     {editing ? (
                       <input
                         type="number"
-                        min={0}
-                        value={eReq.commanders}
-                        onChange={(e) => setEReq({ ...eReq, commanders: +e.target.value })}
+                        min={1}
+                        value={eTotal}
+                        onChange={(e) => setETotal(e.target.value === "" ? "" : +e.target.value)}
                       />
                     ) : (
-                      m.required_commanders
-                    )}
-                  </td>
-                  <td align="center">
-                    {editing ? (
-                      <input
-                        type="number"
-                        min={0}
-                        value={eReq.drivers}
-                        onChange={(e) => setEReq({ ...eReq, drivers: +e.target.value })}
-                      />
-                    ) : (
-                      m.required_drivers
-                    )}
-                  </td>
-                  <td align="center">
-                    {editing ? (
-                      <input
-                        type="number"
-                        min={0}
-                        value={eReq.soldiers}
-                        onChange={(e) => setEReq({ ...eReq, soldiers: +e.target.value })}
-                      />
-                    ) : (
-                      m.required_soldiers
+                      m.total_needed ?? "—"
                     )}
                   </td>
                   <td align="center" style={{ whiteSpace: "nowrap" }}>
                     {editing ? (
                       <>
                         <button onClick={() => saveEdit(m.id)}>Save</button>
-                        <button onClick={cancelEdit} style={{ marginLeft: 8 }}>Cancel</button>
+                        <button onClick={cancelEdit} style={{ marginLeft: 8 }}>
+                          Cancel
+                        </button>
                       </>
                     ) : (
                       <>
@@ -300,32 +403,81 @@ export default function MissionsPage() {
 
                 {isOpen && (
                   <tr>
-                    <td colSpan={6} style={{ background: "#fafafa", borderTop: "1px solid #eee" }}>
+                    <td colSpan={3} style={{ background: "#1f2937", borderTop: "1px solid #eee" }}>
                       <div style={{ display: "grid", gap: 8 }}>
                         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                           <strong>Time slots</strong>
                           {error && <span style={{ color: "crimson", fontSize: 12 }}>{error}</span>}
                         </div>
 
-                        <form onSubmit={(e) => addSlot(e, m.id)} style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                        <form
+                          onSubmit={(e) => addSlot(e, m.id)}
+                          style={{ display: "flex", gap: 8, alignItems: "center" }}
+                        >
                           <label>
                             Start
-                            <input type="time" value={start} onChange={(e) => setStart(e.target.value)} style={{ marginLeft: 6 }} required />
+                            <input
+                              type="time"
+                              value={start}
+                              onChange={(e) => setStart(e.target.value)}
+                              style={{ marginLeft: 6 }}
+                              required
+                            />
                           </label>
                           <label>
                             End
-                            <input type="time" value={end} onChange={(e) => setEnd(e.target.value)} style={{ marginLeft: 6 }} required />
+                            <input
+                              type="time"
+                              value={end}
+                              onChange={(e) => setEnd(e.target.value)}
+                              style={{ marginLeft: 6 }}
+                              required
+                            />
                           </label>
                           <button type="submit">Add slot</button>
                         </form>
 
                         <div style={{ border: "1px solid #e5e7eb", borderRadius: 6, overflow: "hidden" }}>
-                          <table className="tbl-missions" width="100%" cellPadding={8} style={{ borderCollapse: "collapse" }}>
-                            <thead>
-                              <tr style={{ background: "#f6f7f8" }}>
-                                <th align="left">Start</th>
-                                <th align="left">End</th>
-                                <th align="right">Actions</th>
+                          <table
+                            className="tbl-missions"
+                            width="100%"
+                            cellPadding={8}
+                            style={{ borderCollapse: "collapse" }}
+                          >
+                            <thead style={{ backgroundColor: "#1f2937" }}>
+                              <tr style={{ backgroundColor: "#1f2937", borderBottom: "1px solid #374151" }}>
+                                <th
+                                  align="left"
+                                  style={{
+                                    backgroundColor: "#1f2937",
+                                    color: "#e5e7eb",
+                                    fontWeight: "500",
+                                    padding: "8px",
+                                  }}
+                                >
+                                  Start
+                                </th>
+                                <th
+                                  align="left"
+                                  style={{
+                                    backgroundColor: "#1f2937",
+                                    color: "#e5e7eb",
+                                    fontWeight: "500",
+                                    padding: "8px",
+                                  }}
+                                >
+                                  End
+                                </th>
+                                <th
+                                  style={{
+                                    backgroundColor: "#1f2937",
+                                    color: "#e5e7eb",
+                                    fontWeight: "500",
+                                    padding: "8px",
+                                  }}
+                                >
+                                  Actions
+                                </th>
                               </tr>
                             </thead>
                             <tbody>
@@ -342,15 +494,21 @@ export default function MissionsPage() {
                               ))}
                               {slots.length === 0 && (
                                 <tr>
-                                  <td colSpan={3} style={{ opacity: 0.7 }}>(No slots yet)</td>
+                                  <td colSpan={3} style={{ opacity: 0.7 }}>
+                                    (No slots yet)
+                                  </td>
                                 </tr>
                               )}
                             </tbody>
                           </table>
                         </div>
                         <div style={{ fontSize: 12, color: "#6b7280" }}>
-                          Overnight is supported (e.g., 22:00 → 06:00). Overlapping slots for the same mission are blocked.
+                          Overnight is supported (e.g., 22:00 → 06:00). Overlapping slots for the same mission are
+                          blocked.
                         </div>
+
+                        {/* Requirements editor */}
+                        <MissionRequirementsEditor missionId={m.id} roles={roles} />
                       </div>
                     </td>
                   </tr>
@@ -360,7 +518,9 @@ export default function MissionsPage() {
           })}
           {rows.length === 0 && (
             <tr>
-              <td colSpan={6} style={{ opacity: 0.7 }}>(No missions)</td>
+              <td colSpan={3} style={{ opacity: 0.7 }}>
+                (No missions)
+              </td>
             </tr>
           )}
         </tbody>

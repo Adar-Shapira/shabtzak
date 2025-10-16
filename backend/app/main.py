@@ -12,6 +12,7 @@ from app.routers.roles import router as roles_router
 from app.routers.departments import router as departments_router
 from app.routers.soldiers import router as soldiers_router
 from app.routers.missions import router as missions_router
+from app.routers.mission_requirements import router as mission_requirements_router
 
 app = FastAPI(title="Shabtzak API")
 
@@ -32,7 +33,7 @@ app.add_middleware(
     allow_origins=allowed_origins,
     allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",  # catch other local ports
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
     expose_headers=["*"],
 )
@@ -42,8 +43,6 @@ app.add_middleware(
 def on_startup() -> None:
     # sanity probe the DB
     healthcheck()
-    # create tables (no-op for existing)
-    Base.metadata.create_all(bind=engine)
 
 # --- Health ------------------------------------------------------------------
 @app.get("/health")
@@ -55,3 +54,4 @@ app.include_router(roles_router)
 app.include_router(departments_router)
 app.include_router(soldiers_router)
 app.include_router(missions_router)
+app.include_router(mission_requirements_router)

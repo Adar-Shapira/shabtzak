@@ -10,7 +10,8 @@ from .soldier import Soldier
 from .soldier_role import SoldierRole
 from .assignment import Assignment
 from .vacation import Vacation
-from .department import Department  # if you have this
+from .department import Department
+from .mission_requirement import MissionRequirement
 
 __all__ = [
     "Base",

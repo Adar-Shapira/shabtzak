@@ -11,24 +11,12 @@ export const api = axios.create({
 export type Mission = {
   id: number;
   name: string;
-  // start/end are optional (backend may return null)
-  start_hour?: string | null; // "HH:MM:SS" | null
-  end_hour?: string | null;   // "HH:MM:SS" | null
-  required_soldiers: number;
-  required_commanders: number;
-  required_officers: number;
-  required_drivers: number;
+  total_needed?: number | null;
 };
 
 export type MissionCreate = {
   name: string;
-  required_soldiers?: number;
-  required_commanders?: number;
-  required_officers?: number;
-  required_drivers?: number;
-  // optional, usually omitted now
-  start_hour?: string | null; // "HH:MM" | "HH:MM:SS" | null
-  end_hour?: string | null;   // "HH:MM" | "HH:MM:SS" | null
+  total_needed?: number | null;
 };
 
 export type MissionUpdate = Partial<MissionCreate>;
@@ -39,6 +27,29 @@ export type MissionSlot = {
   start_time: string; // "HH:MM:SS"
   end_time: string;   // "HH:MM:SS"
 };
+
+export type MissionRequirement = {
+  role_id: number;
+  count: number;
+};
+
+export type MissionRequirementsBatch = {
+  total_needed?: number | null;
+  requirements: MissionRequirement[];
+};
+
+export async function getMissionRequirements(missionId: number): Promise<MissionRequirementsBatch> {
+  const { data } = await api.get(`/missions/${missionId}/requirements`);
+  return data as MissionRequirementsBatch;
+}
+
+export async function putMissionRequirements(
+  missionId: number,
+  payload: MissionRequirementsBatch
+): Promise<MissionRequirementsBatch[]> {
+  const { data } = await api.put(`/missions/${missionId}/requirements`, payload);
+  return data as MissionRequirementsBatch[];
+}
 
 // --- Small time helpers -----------------------------------------------------
 
@@ -62,23 +73,12 @@ export async function listMissions(): Promise<Mission[]> {
 }
 
 export async function createMission(payload: MissionCreate): Promise<Mission> {
-  // Normalize times to include seconds if provided
-  const body: MissionCreate = {
-    ...payload,
-    start_hour: withSeconds(payload.start_hour),
-    end_hour: withSeconds(payload.end_hour),
-  };
-  const { data } = await api.post<Mission>("/missions", body);
+  const { data } = await api.post<Mission>("/missions", payload);
   return data;
 }
 
 export async function updateMission(id: number, payload: MissionUpdate): Promise<Mission> {
-  const body: MissionUpdate = {
-    ...payload,
-    start_hour: withSeconds(payload.start_hour ?? undefined),
-    end_hour: withSeconds(payload.end_hour ?? undefined),
-  };
-  const { data } = await api.patch<Mission>(`/missions/${id}`, body);
+  const { data } = await api.patch<Mission>(`/missions/${id}`, payload);
   return data;
 }
 

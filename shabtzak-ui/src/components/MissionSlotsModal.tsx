@@ -1,3 +1,4 @@
+// shabtzak-ui\src\components\MissionSlotsModal.tsx
 import { useEffect, useState } from "react";
 import Modal from "./Modal";
 import { listMissionSlots, createMissionSlot, deleteMissionSlot, type MissionSlot } from "../api";
@@ -62,7 +63,16 @@ export default function MissionSlotsModal({ missionId, missionName, open, onClos
 
   return (
     <Modal open={open} onClose={onClose} title={`Slots: ${missionName}`} maxWidth={520}>
-      <div style={{ display: "grid", gap: 12 }}>
+      <div
+        style={{
+          display: "grid",
+          gap: 12,
+          backgroundColor: "#1f2937",   // match desired background
+          color: "white",               // ensure text remains visible
+          borderRadius: 8,
+          padding: 16,
+        }}
+      >
         <form onSubmit={addSlot} style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <input type="time" value={start} onChange={(e) => setStart(e.target.value)} />
           <span>→</span>
@@ -73,21 +83,37 @@ export default function MissionSlotsModal({ missionId, missionName, open, onClos
         {err && <div style={{ color: "crimson" }}>{err}</div>}
         {loading && <div>Loading…</div>}
 
-        <table width="100%" cellPadding={6} style={{ borderCollapse: "collapse" }}>
-          <thead>
-            <tr style={{ borderBottom: "1px solid #ddd" }}>
-              <th align="left">Start</th>
-              <th align="left">End</th>
-              <th>Actions</th>
+        <table
+          width="100%"
+          cellPadding={6}
+          style={{
+            borderCollapse: "collapse",
+            backgroundColor: "#1f2937",
+            color: "white",
+          }}
+        >
+          <thead style={{ backgroundColor: "#1f2937" }}>
+            <tr style={{ borderBottom: "1px solid #374151" }}>
+              <th align="left" style={{ backgroundColor: "#1f2937", color: "#e5e7eb" }}>Start</th>
+              <th align="left" style={{ backgroundColor: "#1f2937", color: "#e5e7eb" }}>End</th>
+              <th style={{ backgroundColor: "#1f2937", color: "#e5e7eb" }}>Actions</th>
             </tr>
           </thead>
           <tbody>
             {slots.map((s) => (
-              <tr key={s.id} style={{ borderTop: "1px solid #eee" }}>
+              <tr key={s.id} style={{ borderTop: "1px solid #374151" }}>
                 <td>{s.start_time.slice(0, 5)}</td>
                 <td>{s.end_time.slice(0, 5)}</td>
                 <td align="center">
-                  <button onClick={() => remove(s.id)} style={{ color: "crimson" }}>
+                  <button
+                    onClick={() => remove(s.id)}
+                    style={{
+                      color: "#f87171",
+                      background: "transparent",
+                      border: "none",
+                      cursor: "pointer",
+                    }}
+                  >
                     Delete
                   </button>
                 </td>
