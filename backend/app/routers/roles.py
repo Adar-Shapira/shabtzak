@@ -12,17 +12,15 @@ router = APIRouter(prefix="/roles", tags=["roles"])
 
 class RoleIn(BaseModel):
     name: str
-    is_core: bool = False
 
 class RoleUpdate(BaseModel):
     name: str | None = None
-    is_core: bool | None = None
 
 @router.get("")
 def list_roles():
     with SessionLocal() as s:
         rows = s.execute(select(Role).order_by(Role.id)).scalars().all()
-        return [{"id": r.id, "name": r.name, "is_core": r.is_core} for r in rows]
+        return [{"id": r.id, "name": r.name} for r in rows]
 
 @router.post("", status_code=201)
 def create_role(payload: RoleIn):
@@ -30,7 +28,7 @@ def create_role(payload: RoleIn):
         try:
             rid = s.execute(
                 insert(Role)
-                .values(name=payload.name.strip(), is_core=payload.is_core)
+                .values(name=payload.name.strip())
                 .returning(Role.id)
             ).scalar_one()
             s.commit()

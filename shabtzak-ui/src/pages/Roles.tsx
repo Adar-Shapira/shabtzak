@@ -4,7 +4,7 @@ import Modal from "../components/Modal";
 import { useDisclosure } from "../hooks/useDisclosure";
 import { api } from "../api";
 
-type Role = { id: number; name: string; is_core: boolean };
+type Role = { id: number; name: string};
 
 export default function RolesPage() {
   const [roles, setRoles] = useState<Role[]>([]);
@@ -14,12 +14,10 @@ export default function RolesPage() {
   // create form
   const addDlg = useDisclosure(false);
   const [newRoleName, setNewRoleName] = useState("");
-  const [newIsCore, setNewIsCore] = useState(false);
 
   // edit state
   const [editId, setEditId] = useState<number | null>(null);
   const [editName, setEditName] = useState("");
-  const [editCore, setEditCore] = useState(false);
 
   const load = async () => {
     setLoading(true); setErr(null);
@@ -36,8 +34,8 @@ export default function RolesPage() {
     e.preventDefault();
     setErr(null);
     try {
-      await api.post("/roles", { name: newRoleName.trim(), is_core: newIsCore });
-      setNewRoleName(""); setNewIsCore(false);
+      await api.post("/roles", { name: newRoleName.trim() });
+      setNewRoleName("");
       addDlg.close();
       await load();
     } catch (e:any) {
@@ -45,11 +43,11 @@ export default function RolesPage() {
     }
   };
 
-  const startEdit = (r: Role) => { setEditId(r.id); setEditName(r.name); setEditCore(r.is_core); };
-  const cancelEdit = () => { setEditId(null); setEditName(""); setEditCore(false); };
+  const startEdit = (r: Role) => { setEditId(r.id); setEditName(r.name); };
+  const cancelEdit = () => { setEditId(null); setEditName(""); };
   const saveEdit = async (id: number) => {
     try {
-      await api.patch(`/roles/${id}`, { name: editName.trim(), is_core: editCore });
+      await api.patch(`/roles/${id}`, { name: editName.trim() });
       setEditId(null);
       await load();
     } catch (e:any) {
@@ -70,12 +68,8 @@ export default function RolesPage() {
       </div>
 
       <Modal open={addDlg.isOpen} onClose={addDlg.close} title="Add Role">
-        <form onSubmit={createRole} style={{ display:"grid", gridTemplateColumns:"1.6fr 1fr auto", gap:10 }}>
+        <form onSubmit={createRole} style={{ display:"grid", gridTemplateColumns:"1fr auto", gap:10 }}>
           <input value={newRoleName} onChange={(e)=>setNewRoleName(e.target.value)} placeholder="Role name" required />
-          <label style={{ display:"flex", alignItems:"center", gap:8 }}>
-            <input type="checkbox" checked={newIsCore} onChange={(e)=>setNewIsCore(e.target.checked)} />
-            Core
-          </label>
           <div style={{ display:"flex", gap:8 }}>
             <button type="button" onClick={addDlg.close}>Cancel</button>
             <button type="submit">Add</button>
@@ -86,8 +80,13 @@ export default function RolesPage() {
       {err && <div style={{color:"crimson"}}>{err}</div>}
       {loading && <div>Loading…</div>}
 
-      <table width="100%" cellPadding={8} style={{borderCollapse:"collapse"}}>
-        <thead><tr><th align="left">Name</th><th>Core</th><th>Actions</th></tr></thead>
+      <table className="tbl-missions" width="100%" cellPadding={8} style={{borderCollapse:"collapse"}}>
+        <thead>
+          <tr>
+            <th align="left">Name</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
         <tbody>
           {roles.map(r => {
             const editing = editId === r.id;
@@ -95,11 +94,6 @@ export default function RolesPage() {
               <tr key={r.id} style={{borderTop:"1px solid #ddd"}}>
                 <td>
                   {editing ? <input value={editName} onChange={e=>setEditName(e.target.value)} /> : r.name}
-                </td>
-                <td align="center">
-                  {editing ? (
-                    <input type="checkbox" checked={editCore} onChange={e=>setEditCore(e.target.checked)} />
-                  ) : (r.is_core ? "✓" : "")}
                 </td>
                 <td align="center">
                   {editing ? (
@@ -117,7 +111,11 @@ export default function RolesPage() {
               </tr>
             );
           })}
-          {roles.length===0 && <tr><td colSpan={3} style={{opacity:.7}}>(No roles)</td></tr>}
+          {roles.length===0 && (
+            <tr>
+              <td colSpan={2} style={{opacity:.7}}>(No roles)</td>
+            </tr>
+          )}
         </tbody>
       </table>
     </div>

@@ -2,7 +2,7 @@ from alembic import op
 import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
-revision = "a1b2c3d4e5f6"     # keep your generated ID
+revision = "a16ef84bb0b9"     # keep your generated ID
 down_revision = "9ebddb5cc8b1"  # your current head from the logs
 branch_labels = None
 depends_on = None

@@ -1,3 +1,4 @@
+// shabtzak-ui\src\components\NavBar.tsx
 import { NavLink } from "react-router-dom";
 
 function linkClass({ isActive }: { isActive: boolean }) {
@@ -10,7 +11,7 @@ export default function NavBar() {
       <div className="navbar-inner">
         <div className="brand">Shabtzak</div>
         <nav className="nav">
-          <NavLink to="/" end className={linkClass}>Home</NavLink>
+          {/*<NavLink to="/" end className={linkClass}>Home</NavLink>*/}
           {/*<NavLink to="/roles" className={linkClass}>Roles</NavLink>*/}
           {/*<NavLink to="/departments" className={linkClass}>Departments</NavLink>*/}
           <NavLink to="/missions" className={linkClass}>Missions</NavLink>

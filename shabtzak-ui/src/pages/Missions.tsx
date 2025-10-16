@@ -211,7 +211,7 @@ export default function MissionsPage() {
       {err && <div style={{ color: "crimson" }}>{err}</div>}
       {loading && <div>Loading…</div>}
 
-      <table width="100%" cellPadding={8} style={{ borderCollapse: "collapse" }}>
+      <table className="tbl-missions" width="100%" cellPadding={8} style={{ borderCollapse: "collapse" }}>
         <thead>
           <tr>
             <th align="left">Name</th>
@@ -320,7 +320,7 @@ export default function MissionsPage() {
                         </form>
 
                         <div style={{ border: "1px solid #e5e7eb", borderRadius: 6, overflow: "hidden" }}>
-                          <table width="100%" cellPadding={8} style={{ borderCollapse: "collapse" }}>
+                          <table className="tbl-missions" width="100%" cellPadding={8} style={{ borderCollapse: "collapse" }}>
                             <thead>
                               <tr style={{ background: "#f6f7f8" }}>
                                 <th align="left">Start</th>

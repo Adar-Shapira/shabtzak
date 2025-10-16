@@ -8,7 +8,6 @@ import { useDisclosure } from "../hooks/useDisclosure";
 type Role = { 
     id: number; 
     name: string; 
-    is_core: boolean
  };
 
 type Department = { 
@@ -131,21 +130,18 @@ export default function SoldiersPage() {
     const rolesDlg = useDisclosure(false);
     const [roleEditId, setRoleEditId] = useState<number | null>(null);
     const [roleName, setRoleName] = useState("");
-    const [roleIsCore, setRoleIsCore] = useState<boolean>(false);
     const [isRoleFormOpen, setIsRoleFormOpen] = useState(false);
 
     const startAddRole = () => {
     setRoleEditId(null);
     setRoleName("");
-    setRoleIsCore(false);
     setIsRoleFormOpen(true);
     rolesDlg.open();
     };
 
-    const startEditRole = (id: number, name: string, is_core: boolean) => {
+    const startEditRole = (id: number, name: string) => {
     setRoleEditId(id);
     setRoleName(name);
-    setRoleIsCore(is_core);
     setIsRoleFormOpen(true);
     rolesDlg.open();
     };
@@ -153,7 +149,6 @@ export default function SoldiersPage() {
     const cancelRoleDialog = () => {
     setRoleEditId(null);
     setRoleName("");
-    setRoleIsCore(false);
     setIsRoleFormOpen(false);
     rolesDlg.close();
     };
@@ -163,15 +158,14 @@ export default function SoldiersPage() {
     setErr(null);
     try {
         if (roleEditId == null) {
-        await api.post("/roles", { name: roleName.trim(), is_core: roleIsCore });
+        await api.post("/roles", { name: roleName.trim() });
         } else {
-        await api.patch(`/roles/${roleEditId}`, { name: roleName.trim(), is_core: roleIsCore });
+        await api.patch(`/roles/${roleEditId}`, { name: roleName.trim() });
         }
         // reset + refresh
         setIsRoleFormOpen(false);
         setRoleEditId(null);
         setRoleName("");
-        setRoleIsCore(false);
         await loadAll();
     } catch (e: any) {
         setErr(e?.response?.data?.detail ?? "Failed to save role");
@@ -608,7 +602,7 @@ export default function SoldiersPage() {
                     {/* Toolbar */}
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <div style={{ fontSize: 12, opacity: 0.75 }}>
-                        Manage roles (core roles are typically required for key assignments)
+                        Manage roles
                     </div>
                     <div style={{ display: "flex", gap: 8 }}>
                         <button onClick={startAddRole}>Add Role</button>
@@ -625,14 +619,6 @@ export default function SoldiersPage() {
                             placeholder="Role name"
                             required
                             />
-                            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14 }}>
-                            <input
-                                type="checkbox"
-                                checked={roleIsCore}
-                                onChange={(e) => setRoleIsCore(e.target.checked)}
-                            />
-                            Core
-                            </label>
                             <div style={{ display: "flex", gap: 8 }}>
                             <button type="submit">{roleEditId == null ? "Add" : "Save"}</button>
                             <button
@@ -641,7 +627,6 @@ export default function SoldiersPage() {
                                 setIsRoleFormOpen(false);
                                 setRoleEditId(null);
                                 setRoleName("");
-                                setRoleIsCore(false);
                                 }}
                             >
                                 Cancel
@@ -656,7 +641,6 @@ export default function SoldiersPage() {
                         <tr>
                         <th align="left" style={{ width: 60 }}>ID</th>
                         <th align="left">Name</th>
-                        <th align="left" style={{ width: 100 }}>Core</th>
                         <th align="left" style={{ width: 180 }}>Actions</th>
                         </tr>
                     </thead>
@@ -665,9 +649,8 @@ export default function SoldiersPage() {
                         <tr key={r.id} style={{ borderTop: "1px solid #eee" }}>
                             <td>{r.id}</td>
                             <td>{r.name}</td>
-                            <td>{r.is_core ? "Yes" : "No"}</td>
                             <td>
-                            <button onClick={() => startEditRole(r.id, r.name, r.is_core)}>Edit</button>
+                            <button onClick={() => startEditRole(r.id, r.name)}>Edit</button>
                             <button
                                 onClick={() => deleteRole(r.id, r.name)}
                                 style={{ marginLeft: 8, color: "crimson" }}

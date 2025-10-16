@@ -1,4 +1,4 @@
-// src/api.ts
+// shabtzak-ui\src\api.ts
 import axios, { AxiosError } from "axios";
 
 export const api = axios.create({

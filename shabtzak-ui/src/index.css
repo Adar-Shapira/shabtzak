@@ -1,3 +1,4 @@
+/*shabtzak-ui\src\index.css*/
 :root {
   font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
   line-height: 1.5;
@@ -125,3 +126,26 @@ input, select, button {
 }
 button { cursor: pointer; }
 button:hover { border-color: rgba(255,255,255,0.2); }
+
+.btn {
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid #4b5563;
+  cursor: pointer;
+  background: #374151;
+  color: #e5e7eb;
+  font: inherit;
+}
+.btn.primary {
+  background: #2563eb;
+  border-color: #1d4ed8;
+  color: #ffffff;
+}
+.btn.ghost {
+  background: transparent;
+  border-color: #4b5563;
+}
+.btn:disabled {
+  opacity: .6;
+  cursor: not-allowed;
+}
