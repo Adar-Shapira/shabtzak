@@ -120,6 +120,7 @@ export type Soldier = {
   id: number;
   name: string;
   department_id?: number | null;
+  roles?: Array<{ id: number; name: string }>;
 };
 
 export async function listSoldiers(): Promise<Soldier[]> {

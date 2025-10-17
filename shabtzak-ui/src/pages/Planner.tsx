@@ -153,6 +153,7 @@ export default function Planner() {
   const [pendingAssignmentId, setPendingAssignmentId] = useState<number | null>(null);
   const [changeLoading, setChangeLoading] = useState(false);
   const [changeError, setChangeError] = useState<string | null>(null);
+  const [pendingRoleName, setPendingRoleName] = useState<string | null>(null);
 
 
   async function runPlanner() {
@@ -184,15 +185,18 @@ export default function Planner() {
     }
   }
 
-  async function openChangeModal(assignmentId: number) {
+  async function openChangeModal(assignmentId: number, roleName: string | null) {
     setPendingAssignmentId(assignmentId);
+    setPendingRoleName(roleName);
     setChangeError(null);
     setIsChangeOpen(true);
 
     try {
-      // Only fetch once per open; if you prefer, cache across opens
       const soldiers = await listSoldiers();
-      setAllSoldiers(soldiers);
+      const filtered = roleName
+        ? soldiers.filter(s => (s.roles || []).some(r => r.name === roleName))
+        : soldiers;
+      setAllSoldiers(filtered);
     } catch (e) {
       setChangeError("Failed to load soldiers");
     }
@@ -381,7 +385,10 @@ export default function Planner() {
                   {allSoldiers.length === 0 && <div>No soldiers found</div>}
                   {allSoldiers.map((s) => (
                     <div key={s.id} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid #eee" }}>
-                      <span>{s.name}</span>
+                      <span>
+                        {s.name}
+                        {s.roles && s.roles.length > 0 ? ` (${s.roles.map(r => r.name).join(", ")})` : ""}
+                      </span>
                       <button type="button" onClick={() => handleReassign(s.id)}>
                         Assign
                       </button>
@@ -434,7 +441,7 @@ export default function Planner() {
                             <span>{r.soldier_name || "Unassigned"}</span>
                             <button
                               type="button"
-                              onClick={() => openChangeModal(r.id)}
+                              onClick={() => openChangeModal(r.id, r.role)}
                               style={{ padding: "2px 8px" }}
                             >
                               Change
