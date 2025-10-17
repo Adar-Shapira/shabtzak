@@ -1,178 +1,291 @@
 # backend/app/routers/missions.py
-from datetime import time
-from fastapi import APIRouter, Depends, HTTPException, Path, Body
-from pydantic import BaseModel, Field, field_validator
-from sqlalchemy.orm import Session
-from sqlalchemy import and_
+from datetime import date, time, datetime
+from typing import List
 
-from app.db import get_db
-from app.models import Mission, MissionSlot
+from fastapi import APIRouter, HTTPException, Query, Depends, Path
+from sqlalchemy import select, insert, update, delete, func
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from app.db import get_db, SessionLocal
+from app.models.mission import Mission
+from app.models.mission_slot import MissionSlot
+from app.models.assignment import Assignment
+from app.models.soldier import Soldier
 from app.schemas.mission import MissionCreate, MissionUpdate, MissionOut
+from app.schemas.mission_slot import MissionSlotCreate, MissionSlotRead, MissionSlotUpdate
 
 router = APIRouter(prefix="/missions", tags=["missions"])
 
-# --------------------------- Mission CRUD -----------------------------------
+# ----------------------------------------------------------------------
+# Helpers
+# ----------------------------------------------------------------------
+def _has_named_role(sol: Soldier, role_name: str) -> bool:
+    """True if soldier has a role with this exact name (many-to-many)."""
+    try:
+        return any(r.name == role_name for r in (sol.roles or []))
+    except Exception:
+        return False
 
-@router.get("", response_model=list[MissionOut])
+
+def _bucket(sol: Soldier) -> str:
+    """Canonical bucket used for coverage counts."""
+    for name in ("Officer", "Commander", "Driver"):
+        if _has_named_role(sol, name):
+            return name
+    return "Soldier"
+
+
+def _time_in_range(t: time, start: time, end: time) -> bool:
+    if start <= end:
+        return start <= t < end
+    return t >= start or t < end
+
+
+def slots_overlap(a_start: time, a_end: time, b_start: time, b_end: time) -> bool:
+    return _time_in_range(a_start, b_start, b_end) or _time_in_range(b_start, a_start, a_end)
+
+
+def _tstr(t: time | None) -> str | None:
+    return t.isoformat() if t is not None else None
+
+# ----------------------------------------------------------------------
+# Missions CRUD
+# ----------------------------------------------------------------------
+@router.get("", response_model=List[MissionOut])
 def list_missions(db: Session = Depends(get_db)):
-    return db.query(Mission).order_by(Mission.id.asc()).all()
+    """List all missions (start/end may be null)."""
+    rows = db.scalars(select(Mission).order_by(Mission.id)).all()
+    return rows
+
 
 @router.post("", response_model=MissionOut, status_code=201)
 def create_mission(payload: MissionCreate, db: Session = Depends(get_db)):
-    # Only name + optional total_needed now
-    name = payload.name.strip()
-    if not name:
-        raise HTTPException(400, "Name is required")
-    # enforce unique name at app level for nicer error than 500
-    existing = db.query(Mission).filter(Mission.name == name).first()
-    if existing:
-        raise HTTPException(409, "Mission name already exists")
+    try:
+        new_id = db.execute(
+            insert(Mission).values(
+                name=payload.name.strip(),
+                total_needed=payload.total_needed,
+            ).returning(Mission.id)
+        ).scalar_one()
+        db.commit()
+        return db.get(Mission, new_id)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Mission name already exists")
 
-    m = Mission(name=name, total_needed=payload.total_needed)
-    db.add(m)
-    db.commit()
-    db.refresh(m)
-    return m
 
 @router.patch("/{mission_id}", response_model=MissionOut)
-def update_mission(
-    mission_id: int = Path(..., ge=1),
-    payload: MissionUpdate = Body(...),
-    db: Session = Depends(get_db),
-):
-    m = db.query(Mission).get(mission_id)
-    if not m:
-        raise HTTPException(404, "Mission not found")
+def update_mission(mission_id: int, payload: MissionUpdate, db: Session = Depends(get_db)):
+    mission = db.get(Mission, mission_id)
+    if not mission:
+        raise HTTPException(status_code=404, detail="Mission not found")
 
-    if payload.name is not None:
-        new_name = payload.name.strip()
-        if not new_name:
-            raise HTTPException(400, "Name cannot be empty")
-        # unique name check
-        exists = db.query(Mission).filter(Mission.name == new_name, Mission.id != mission_id).first()
-        if exists:
-            raise HTTPException(409, "Another mission already uses that name")
-        m.name = new_name
+    values = payload.model_dump(exclude_unset=True)
+    if not values:
+        return mission
 
-    if payload.total_needed is not None:
-        if payload.total_needed < 1:
-            raise HTTPException(400, "total_needed must be >= 1")
-        m.total_needed = payload.total_needed
+    try:
+        db.execute(update(Mission).where(Mission.id == mission_id).values(**values))
+        db.commit()
+        return db.get(Mission, mission_id)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Mission name already exists")
 
-    db.commit()
-    db.refresh(m)
-    return m
 
 @router.delete("/{mission_id}", status_code=204)
-def delete_mission(mission_id: int = Path(..., ge=1), db: Session = Depends(get_db)):
-    m = db.query(Mission).get(mission_id)
-    if not m:
-        raise HTTPException(404, "Mission not found")
+def delete_mission(mission_id: int, db: Session = Depends(get_db)):
+    """Delete a mission if it has no assignments."""
+    has_asg = db.scalar(
+        select(func.count()).select_from(Assignment).where(Assignment.mission_id == mission_id)
+    )
+    if has_asg:
+        raise HTTPException(status_code=400, detail="Mission has assignments; clear them first")
 
-    # If you need to block deletion when there are assignments, check here.
-    db.delete(m)
+    res = db.execute(delete(Mission).where(Mission.id == mission_id))
+    if res.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Mission not found")
     db.commit()
     return None
 
-# --------------------------- Slots endpoints --------------------------------
 
-class SlotCreate(BaseModel):
-    start_time: time = Field(..., description="HH:MM or HH:MM:SS")
-    end_time: time = Field(..., description="HH:MM or HH:MM:SS")
-
-    @field_validator("start_time", "end_time", mode="before")
-    @classmethod
-    def _parse_str_time(cls, v):
-        # Accept "HH:MM" strings gracefully; pydantic will handle time objs
-        if isinstance(v, str) and len(v) == 5:
-            return f"{v}:00"
-        return v
-
-class SlotOut(BaseModel):
-    id: int
-    mission_id: int
-    start_time: time
-    end_time: time
-
-    class Config:
-        from_attributes = True
-
-def _overlaps(a_start: time, a_end: time, b_start: time, b_end: time) -> bool:
-    """
-    Return True if [a_start, a_end) overlaps [b_start, b_end) with support for overnight ranges.
-    Overnight means end < start (e.g., 22:00 -> 06:00).
-    """
-    def normalize(start: time, end: time):
-        if end <= start:  # overnight, push end by 24h in minutes
-            return (start.hour * 60 + start.minute, (end.hour * 60 + end.minute) + 24 * 60)
-        return (start.hour * 60 + start.minute, end.hour * 60 + end.minute)
-
-    a0, a1 = normalize(a_start, a_end)
-    b0, b1 = normalize(b_start, b_end)
-    # Try also shifting windows into same "day frame"
-    # Compare both ways to catch cross-midnight interactions
-    if a1 <= a0 or b1 <= b0:
-        return True  # zero/negative duration is considered invalid/overlap
-
-    # Two intervals overlap if they intersect with positive measure
-    return not (a1 <= b0 or b1 <= a0)
-
-@router.get("/{mission_id}/slots", response_model=list[SlotOut])
-def list_slots(mission_id: int = Path(..., ge=1), db: Session = Depends(get_db)):
-    m = db.query(Mission).get(mission_id)
-    if not m:
-        raise HTTPException(404, "Mission not found")
-    rows = (
-        db.query(MissionSlot)
-        .filter(MissionSlot.mission_id == mission_id)
-        .order_by(MissionSlot.start_time.asc())
-        .all()
-    )
-    return rows
-
-@router.post("/{mission_id}/slots", response_model=SlotOut, status_code=201)
-def create_slot(
-    mission_id: int = Path(..., ge=1),
-    payload: SlotCreate = Body(...),
+# ----------------------------------------------------------------------
+# Coverage
+# ----------------------------------------------------------------------
+@router.get("/{mission_id}/slots/{slot_id}/coverage")
+def mission_slot_coverage(
+    mission_id: int,
+    slot_id: int,
+    day: date = Query(..., description="Calendar day in YYYY-MM-DD"),
     db: Session = Depends(get_db),
 ):
-    m = db.query(Mission).get(mission_id)
-    if not m:
-        raise HTTPException(404, "Mission not found")
+    slot = db.get(MissionSlot, slot_id)
+    if not slot or slot.mission_id != mission_id:
+        raise HTTPException(status_code=404, detail="Slot not found")
 
-    if payload.start_time == payload.end_time:
-        raise HTTPException(400, "Start and end cannot be equal")
+    mission = db.get(Mission, mission_id)
+    if not mission:
+        raise HTTPException(status_code=404, detail="Mission not found")
 
-    # Overlap check against existing slots for this mission
-    existing = db.query(MissionSlot).filter(MissionSlot.mission_id == mission_id).all()
-    for s in existing:
-        if _overlaps(payload.start_time, payload.end_time, s.start_time, s.end_time):
-            raise HTTPException(400, "Slot overlaps an existing slot for this mission")
+    # Absolute window for the slot (supports overnight)
+    start_at, end_at = Assignment.window_for(slot.start_time, slot.end_time, day)
 
-    row = MissionSlot(
-        mission_id=mission_id,
-        start_time=payload.start_time,
-        end_time=payload.end_time,
+    # Pull requirements with role names
+    req_rows = db.execute(
+        select(MissionRequirement, Role)
+        .join(Role, Role.id == MissionRequirement.role_id)
+        .where(MissionRequirement.mission_id == mission_id)
+        .order_by(Role.name.asc(), MissionRequirement.id.asc())
+    ).all()
+
+    requirements = [
+        {
+            "role_id": role.id,
+            "role_name": role.name,
+            "count": int(req.count or 0),
+        }
+        for (req, role) in req_rows
+    ]
+
+    # Assignments during this window
+    rows = db.execute(
+        select(Assignment, Soldier)
+        .join(Soldier, Soldier.id == Assignment.soldier_id)
+        .where(
+            Assignment.mission_id == mission_id,
+            Assignment.start_at == start_at,
+            Assignment.end_at == end_at,
+        )
+    ).all()
+
+    # Count assigned per role_id
+    assigned_by_role: dict[int, int] = {r["role_id"]: 0 for r in requirements}
+    # If a requirement's role_id doesn’t exist in requirements, we don’t count it
+    # Count a soldier for a role if the soldier has that role
+    for _a, sol in rows:
+        sol_role_ids = {r.id for r in (sol.roles or [])}
+        for r in requirements:
+            if r["role_id"] in sol_role_ids:
+                assigned_by_role[r["role_id"]] += 1
+
+    assigned = [
+        {"role_id": r["role_id"], "role_name": r["role_name"], "count": assigned_by_role[r["role_id"]]}
+        for r in requirements
+    ]
+
+    still_needed = [
+        {"role_id": r["role_id"], "role_name": r["role_name"], "count": max(0, r["count"] - assigned_by_role[r["role_id"]])}
+        for r in requirements
+    ]
+
+    def _tstr(dt):
+        return dt.isoformat() if dt else None
+
+    return {
+        "mission": {"id": mission.id, "name": mission.name},
+        "slot": {
+            "id": slot.id,
+            "start_time": slot.start_time.strftime("%H:%M"),
+            "end_time": slot.end_time.strftime("%H:%M"),
+            "start_at": _tstr(start_at),
+            "end_at": _tstr(end_at),
+        },
+        "requirements": requirements,
+        "assigned": assigned,
+        "still_needed": still_needed,
+        # keep total-needed for UI if you use it
+        "total_needed": mission.total_needed or 0,
+    }
+
+# ----------------------------------------------------------------------
+# Mission Slots
+# ----------------------------------------------------------------------
+@router.get("/{mission_id}/slots", response_model=List[MissionSlotRead])
+def list_mission_slots(mission_id: int, db: Session = Depends(get_db)):
+    mission = db.get(Mission, mission_id)
+    if not mission:
+        raise HTTPException(status_code=404, detail="Mission not found")
+
+    slots = db.scalars(
+        select(MissionSlot)
+        .where(MissionSlot.mission_id == mission_id)
+        .order_by(MissionSlot.start_time)
+    ).all()
+    return slots
+
+
+@router.post("/{mission_id}/slots", response_model=MissionSlotRead, status_code=201)
+def create_mission_slot(mission_id: int, payload: MissionSlotCreate, db: Session = Depends(get_db)):
+    mission = db.get(Mission, mission_id)
+    if not mission:
+        raise HTTPException(status_code=404, detail="Mission not found")
+
+    exists = db.scalar(
+        select(MissionSlot).where(
+            MissionSlot.mission_id == mission_id,
+            MissionSlot.start_time == payload.start_time,
+            MissionSlot.end_time == payload.end_time,
+        )
     )
-    db.add(row)
+    if exists:
+        raise HTTPException(status_code=409, detail="Slot with same range already exists")
+
+    existing = db.scalars(select(MissionSlot).where(MissionSlot.mission_id == mission_id)).all()
+    for s in existing:
+        if slots_overlap(payload.start_time, payload.end_time, s.start_time, s.end_time):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Overlaps existing slot {s.start_time.strftime('%H:%M')}-{s.end_time.strftime('%H:%M')}",
+            )
+
+    slot = MissionSlot(mission_id=mission_id, start_time=payload.start_time, end_time=payload.end_time)
+    db.add(slot)
     db.commit()
-    db.refresh(row)
-    return row
+    db.refresh(slot)
+    return slot
+
+
+@router.patch("/{mission_id}/slots/{slot_id}", response_model=MissionSlotRead)
+def update_mission_slot(
+    mission_id: int,
+    slot_id: int = Path(..., ge=1),
+    payload: MissionSlotUpdate = ...,
+    db: Session = Depends(get_db),
+):
+    slot = db.get(MissionSlot, slot_id)
+    if not slot or slot.mission_id != mission_id:
+        raise HTTPException(status_code=404, detail="Slot not found")
+
+    start = payload.start_time if payload.start_time is not None else slot.start_time
+    end = payload.end_time if payload.end_time is not None else slot.end_time
+    if start == end:
+        raise HTTPException(status_code=400, detail="end_time must differ from start_time")
+
+    siblings = db.scalars(
+        select(MissionSlot).where(MissionSlot.mission_id == mission_id, MissionSlot.id != slot_id)
+    ).all()
+    for s in siblings:
+        if s.start_time == start and s.end_time == end:
+            raise HTTPException(status_code=409, detail="Slot with same range already exists")
+        if slots_overlap(start, end, s.start_time, s.end_time):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Overlaps existing slot {s.start_time.strftime('%H:%M')}-{s.end_time.strftime('%H:%M')}",
+            )
+
+    slot.start_time = start
+    slot.end_time = end
+    db.commit()
+    db.refresh(slot)
+    return slot
+
 
 @router.delete("/{mission_id}/slots/{slot_id}", status_code=204)
-def delete_slot(
-    mission_id: int = Path(..., ge=1),
-    slot_id: int = Path(..., ge=1),
-    db: Session = Depends(get_db),
-):
-    m = db.query(Mission).get(mission_id)
-    if not m:
-        raise HTTPException(404, "Mission not found")
-
-    s = db.query(MissionSlot).filter_by(id=slot_id, mission_id=mission_id).first()
-    if not s:
-        raise HTTPException(404, "Slot not found")
-
-    db.delete(s)
+def delete_mission_slot(mission_id: int, slot_id: int, db: Session = Depends(get_db)):
+    slot = db.get(MissionSlot, slot_id)
+    if not slot or slot.mission_id != mission_id:
+        raise HTTPException(status_code=404, detail="Slot not found")
+    db.delete(slot)
     db.commit()
     return None

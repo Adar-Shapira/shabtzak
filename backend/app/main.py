@@ -14,6 +14,9 @@ from app.routers.soldiers import router as soldiers_router
 from app.routers.missions import router as missions_router
 from app.routers.assignments import router as assignments_router
 from app.routers.planning import router as planning_router
+from app.routers.mission_requirements import router as mission_requirements_router
+from app.routers.vacations import router as vacations_router
+
 
 def build_app() -> FastAPI:
     app = FastAPI(title="Shabtzak API")
@@ -22,10 +25,11 @@ def build_app() -> FastAPI:
     frontend_origin = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[frontend_origin, "http://localhost:3000", "http://127.0.0.1:5173", "http://0.0.0.0:5173"],
+        allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?$",
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        max_age=600,
     )
 
     # Health
@@ -40,6 +44,8 @@ def build_app() -> FastAPI:
     app.include_router(missions_router)
     app.include_router(assignments_router)
     app.include_router(planning_router)
+    app.include_router(mission_requirements_router)
+    app.include_router(vacations_router)
 
     return app
 

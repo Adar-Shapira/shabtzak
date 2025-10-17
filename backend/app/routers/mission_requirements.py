@@ -1,64 +1,103 @@
 # backend\app\routers\mission_requirements.py
-from fastapi import APIRouter, HTTPException, Depends, Path
-from sqlalchemy.orm import Session
+from __future__ import annotations
 
-from app.db import get_db
-from app.models import Mission, Role, MissionRequirement
-from app.schemas.mission_requirement import MissionRequirement as MissionRequirementSchema
-from app.schemas.mission_requirement import MissionRequirementsBatch
+from typing import List
 
-router = APIRouter(prefix="/missions", tags=["missions:requirements"])
+from fastapi import APIRouter, HTTPException, Path
+from pydantic import BaseModel, field_validator
+from sqlalchemy import delete, select, insert
+from sqlalchemy.orm import joinedload
 
-@router.get("/{mission_id}/requirements", response_model=MissionRequirementsBatch)
-def list_requirements(mission_id: int = Path(..., ge=1), db: Session = Depends(get_db)):
-    mission = db.query(Mission).get(mission_id)
-    if not mission:
-        raise HTTPException(404, "Mission not found")
+from app.db import SessionLocal
+from app.models.mission import Mission
+from app.models.mission_requirement import MissionRequirement
+from app.models.role import Role
 
-    reqs = db.query(MissionRequirement).filter_by(mission_id=mission_id).all()
-    return {
-        "total_needed": mission.total_needed,
-        "requirements": [{"role_id": r.role_id, "count": r.count} for r in reqs],
-    }
+router = APIRouter(tags=["missions"])
 
-@router.put("/{mission_id}/requirements", response_model=MissionRequirementsBatch)
-def replace_requirements(
-    payload: MissionRequirementsBatch,
-    mission_id: int = Path(..., ge=1),
-    db: Session = Depends(get_db),
-):
-    mission = db.query(Mission).get(mission_id)
-    if not mission:
-        raise HTTPException(404, "Mission not found")
+class RequirementIn(BaseModel):
+    role_id: int
+    count: int
 
-    # validate roles exist
-    role_ids = {r.role_id for r in payload.requirements}
-    if role_ids:
-        existing = {r.id for r in db.query(Role.id).filter(Role.id.in_(role_ids)).all()}
-        missing = role_ids - existing
-        if missing:
-            raise HTTPException(400, f"Unknown role ids: {sorted(missing)}")
+    @field_validator("count")
+    @classmethod
+    def _v_count(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("count must be >= 0")
+        return v
 
-    # optional sum validation vs total_needed
-    if payload.total_needed is not None:
-        mission.total_needed = payload.total_needed
+class RequirementOut(BaseModel):
+    id: int
+    role_id: int
+    role_name: str
+    count: int
 
-    sum_counts = sum(r.count for r in payload.requirements)
-    if mission.total_needed is not None and sum_counts > mission.total_needed:
-        raise HTTPException(400, "Sum of role counts exceeds total_needed")
+@router.get("/missions/{mission_id}/requirements", response_model=List[RequirementOut])
+def get_requirements(mission_id: int = Path(ge=1)):
+    with SessionLocal() as s:
+        mission = s.get(Mission, mission_id)
+        if not mission:
+            raise HTTPException(404, "Mission not found")
 
-    # replace set atomically
-    db.query(MissionRequirement).filter_by(mission_id=mission_id).delete()
-    to_add = [
-        MissionRequirement(mission_id=mission_id, role_id=r.role_id, count=r.count)
-        for r in payload.requirements
-    ]
-    db.add_all(to_add)
-    db.commit()
+        q = (
+            select(MissionRequirement, Role)
+            .join(Role, Role.id == MissionRequirement.role_id)
+            .where(MissionRequirement.mission_id == mission_id)
+            .order_by(Role.name.asc(), MissionRequirement.id.asc())
+        )
+        rows = s.execute(q).all()
+        return [
+            RequirementOut(
+                id=req.id,
+                role_id=role.id,
+                role_name=role.name or f"Role {role.id}",
+                count=req.count or 0,
+            )
+            for (req, role) in rows
+        ]
 
-    # return batch shape
-    return {
-        "total_needed": mission.total_needed,
-        "requirements": [{"role_id": r.role_id, "count": r.count} for r in to_add],
-    }
+@router.put("/missions/{mission_id}/requirements", response_model=List[RequirementOut])
+def put_requirements(mission_id: int, payload: List[RequirementIn]):
+    with SessionLocal() as s:
+        mission = s.get(Mission, mission_id)
+        if not mission:
+            raise HTTPException(404, "Mission not found")
 
+        # validate roles exist
+        role_ids = {item.role_id for item in payload}
+        if role_ids:
+            existing_roles = {r.id for r in s.execute(select(Role).where(Role.id.in_(role_ids))).scalars().all()}
+            missing = role_ids - existing_roles
+            if missing:
+                raise HTTPException(400, f"Unknown role_id(s): {sorted(missing)}")
+
+        # replace-all semantics
+        s.execute(delete(MissionRequirement).where(MissionRequirement.mission_id == mission_id))
+        for item in payload:
+            if item.count > 0:
+                s.execute(
+                    insert(MissionRequirement).values(
+                        mission_id=mission_id,
+                        role_id=item.role_id,
+                        count=item.count,
+                    )
+                )
+        s.commit()
+
+        # return fresh list
+        q = (
+            select(MissionRequirement, Role)
+            .join(Role, Role.id == MissionRequirement.role_id)
+            .where(MissionRequirement.mission_id == mission_id)
+            .order_by(Role.name.asc(), MissionRequirement.id.asc())
+        )
+        rows = s.execute(q).all()
+        return [
+            RequirementOut(
+                id=req.id,
+                role_id=role.id,
+                role_name=role.name or f"Role {role.id}",
+                count=req.count or 0,
+            )
+            for (req, role) in rows
+        ]

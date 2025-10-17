@@ -12,7 +12,7 @@ class MissionRequirement(Base):
     count = Column(Integer, nullable=False, default=1)
 
     # Use string names to avoid circular imports
-    mission = relationship("Mission", backref="requirements")
+    mission = relationship("Mission", back_populates="requirements")
     role = relationship("Role")
 
     __table_args__ = (

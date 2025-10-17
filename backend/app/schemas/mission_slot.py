@@ -1,40 +1,40 @@
 # backend/app/schemas/mission_slot.py
 from __future__ import annotations
-
 from datetime import time
 from typing import Optional
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel
+from pydantic.config import ConfigDict
+from pydantic import field_validator
 
-# -----------------------------
-# Mission Slots (times required)
-# -----------------------------
-class MissionSlotBase(BaseModel):
+class MissionSlotCreate(BaseModel):
     start_time: time
     end_time: time
 
-    @model_validator(mode="after")
-    def check_times(self) -> "MissionSlotBase":
-        # If you need overnight support, change this to `if self.start_time == self.end_time:`
-        if self.end_time <= self.start_time:
-            raise ValueError("end_time must be after start_time")
-        return self
-
-class MissionSlotCreate(MissionSlotBase):
-    pass
+    @field_validator("end_time")
+    @classmethod
+    def _must_differ(cls, end, info):
+        start = info.data.get("start_time")
+        if start and end == start:
+            raise ValueError("end_time must differ from start_time")
+        # allow overnight (end < start)
+        return end
 
 class MissionSlotUpdate(BaseModel):
     start_time: Optional[time] = None
     end_time: Optional[time] = None
 
-    @model_validator(mode="after")
-    def check_times(self) -> "MissionSlotUpdate":
-        if self.start_time is not None and self.end_time is not None:
-            if self.end_time <= self.start_time:
-                raise ValueError("end_time must be after start_time")
-        return self
+    @field_validator("end_time")
+    @classmethod
+    def _must_differ_if_both_present(cls, end, info):
+        start = info.data.get("start_time")
+        if start is not None and end is not None and end == start:
+            raise ValueError("end_time must differ from start_time")
+        return end
 
-class MissionSlotRead(MissionSlotBase):
+class MissionSlotRead(BaseModel):
     id: int
     mission_id: int
+    start_time: time
+    end_time: time
 
-    model_config = dict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True)

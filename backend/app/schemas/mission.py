@@ -1,18 +1,22 @@
-# backend/app/schemas/mission.py
+# backend\app\schemas\mission.py
 from typing import Optional
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel
 
-class MissionCreate(BaseModel):
+class MissionBase(BaseModel):
     name: str
     total_needed: Optional[int] = None
+
+class MissionCreate(MissionBase):
+    pass
 
 class MissionUpdate(BaseModel):
     name: Optional[str] = None
     total_needed: Optional[int] = None
 
 class MissionOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
     id: int
     name: str
     total_needed: Optional[int] = None
+
+    class Config:
+        from_attributes = True

@@ -9,10 +9,9 @@ import {
   createMissionSlot,
   deleteMissionSlot,
   type MissionSlot,
-  getMissionRequirements,
-  putMissionRequirements,
-  type MissionRequirementsBatch,
+  // We'll call api.get/api.put directly for requirements
 } from "../api";
+
 
 // Minimal Mission type for this page
 type Mission = {
@@ -29,11 +28,12 @@ type Role = {
 
 /* ------------------------------ Requirements ------------------------------ */
 
-function MissionRequirementsEditor({ missionId, roles }: { missionId: number; roles: Role[] }) {
+function MissionRequirementsEditor({ missionId, roles, initialTotal }: { missionId: number; roles: Role[]; initialTotal: number | null }) {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [total, setTotal] = useState<number | "">("");
+  const [total, setTotal] = useState<number | "">(initialTotal ?? "");
   const [rows, setRows] = useState<{ role_id: number | ""; count: number | "" }[]>([]);
+  
 
   const sum = rows.reduce((acc, r) => acc + (Number(r.count) || 0), 0);
 
@@ -41,20 +41,18 @@ function MissionRequirementsEditor({ missionId, roles }: { missionId: number; ro
     setLoading(true);
     setErr(null);
     try {
-      const data: MissionRequirementsBatch = await getMissionRequirements(missionId);
-      setTotal(data.total_needed ?? "");
-      setRows(
-        data.requirements.map((r: { role_id: number; count: number }) => ({
-          role_id: r.role_id,
-          count: r.count,
-        }))
+      const reqs = await api.get<Array<{ id: number; role_id: number; role_name: string; count: number }>>(
+        `/missions/${missionId}/requirements`
       );
+      setRows(reqs.data.map(r => ({ role_id: r.role_id, count: r.count })));
     } catch (e: any) {
       setErr(e?.message ?? "Failed to load requirements");
     } finally {
       setLoading(false);
     }
   };
+
+
 
   useEffect(() => {
     load();
@@ -70,13 +68,20 @@ function MissionRequirementsEditor({ missionId, roles }: { missionId: number; ro
     setLoading(true);
     setErr(null);
     try {
-      const clean = rows
-        .filter((r) => r.role_id !== "" && r.count !== "")
-        .map((r) => ({ role_id: Number(r.role_id), count: Number(r.count) }));
-      await putMissionRequirements(missionId, {
+      // 1) Save total_needed on the mission
+      await api.patch(`/missions/${missionId}`, {
         total_needed: total === "" ? null : Number(total),
-        requirements: clean,
       });
+
+      // 2) Save requirements as a plain array
+      const clean = rows
+        .filter(r => r.role_id !== "" && r.count !== "")
+        .map(r => ({ role_id: Number(r.role_id), count: Number(r.count) }));
+
+      await api.put(`/missions/${missionId}/requirements`, clean, {
+        headers: { "Content-Type": "application/json" },
+      });
+
       await load();
     } catch (e: any) {
       setErr(e?.response?.data?.detail ?? e?.message ?? "Failed to save requirements");
@@ -84,6 +89,7 @@ function MissionRequirementsEditor({ missionId, roles }: { missionId: number; ro
       setLoading(false);
     }
   };
+
 
   return (
     <div style={{ marginTop: 12, border: "1px solid #e5e7eb", borderRadius: 8, padding: 12 }}>
@@ -508,7 +514,7 @@ export default function MissionsPage() {
                         </div>
 
                         {/* Requirements editor */}
-                        <MissionRequirementsEditor missionId={m.id} roles={roles} />
+                        <MissionRequirementsEditor missionId={m.id} roles={roles} initialTotal={m.total_needed ?? null} />
                       </div>
                     </td>
                   </tr>

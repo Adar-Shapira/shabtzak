@@ -63,6 +63,7 @@ def _overlaps_assignment(s, soldier_id: int, start_at: datetime, end_at: datetim
 
 
 def _eligible_soldiers_for_role(s, role_id: int) -> List[Soldier]:
+    # All soldiers that have the specific role
     q = (
         select(Soldier)
         .join(SoldierRole, SoldierRole.soldier_id == Soldier.id)
@@ -70,6 +71,10 @@ def _eligible_soldiers_for_role(s, role_id: int) -> List[Soldier]:
         .order_by(Soldier.id.asc())
     )
     return [row[0] for row in s.execute(q).all()]
+
+
+def _all_soldiers(s) -> List[Soldier]:
+    return s.execute(select(Soldier).order_by(Soldier.id.asc())).scalars().all()
 
 
 # ---------- Payload / Response models ----------------------------------------
@@ -105,11 +110,12 @@ class PlanFillResponse(BaseModel):
 def fill_plan(payload: PlanFillPayload):
     """
     Greedy planner:
-    - For each mission slot on the given day:
-      - If Mission has role requirements: fill per role counts.
-      - Else if Mission.total_needed is set: fill that many with any-role soldiers.
-    - Skips soldiers who are on vacation or already overlapping another assignment.
-    - Inserts Assignment rows for the computed [start_at, end_at] window.
+
+    For each mission and each of its slots on the given day:
+      1) Satisfy per-role requirements (minimums).
+      2) If mission.total_needed is set, fill any remaining headcount for that slot
+         with *any* available soldier (with or without roles) until total_needed is reached.
+    Always skip soldiers who are on vacation or already overlapping another assignment.
     """
     d = payload.day
     results: List[PlanResultItem] = []
@@ -124,7 +130,7 @@ def fill_plan(payload: PlanFillPayload):
 
         for m in missions:
             mission_brief = MissionBrief(id=m.id, name=(m.name or f"Mission {m.id}"))
-            created_count = 0
+            created_total_for_mission = 0
             error_msg: str | None = None
 
             try:
@@ -137,15 +143,17 @@ def fill_plan(payload: PlanFillPayload):
                 for slot in m.slots:
                     start_at, end_at = _mission_window(d, slot.start_time, slot.end_time)
 
+                    # Track how many we assign for THIS slot (used for "remainder" calc).
+                    created_for_slot = 0
+
+                    # --- Step 1: per-role minimums
                     if m.requirements:
-                        # Fill per-role
                         for req in m.requirements:
                             needed = max(0, int(req.count or 0))
                             if needed == 0:
                                 continue
 
-                            eligible = _eligible_soldiers_for_role(s, req.role_id)
-                            for soldier in eligible:
+                            for soldier in _eligible_soldiers_for_role(s, req.role_id):
                                 if needed == 0:
                                     break
                                 if _soldier_on_vacation(s, soldier.id, d):
@@ -163,34 +171,34 @@ def fill_plan(payload: PlanFillPayload):
                                     )
                                 )
                                 needed -= 1
-                                created_count += 1
+                                created_for_slot += 1
+                                created_total_for_mission += 1
 
-                    else:
-                        # No per-role requirements; fall back to total_needed
-                        needed_total = int(m.total_needed or 0)
-                        if needed_total <= 0:
-                            continue
+                    # --- Step 2: remainder up to total_needed (any soldier)
+                    total_needed = int(m.total_needed or 0)
+                    if total_needed > 0:
+                        remainder = max(0, total_needed - created_for_slot)
+                        if remainder > 0:
+                            for soldier in _all_soldiers(s):
+                                if remainder == 0:
+                                    break
+                                if _soldier_on_vacation(s, soldier.id, d):
+                                    continue
+                                if _overlaps_assignment(s, soldier.id, start_at, end_at):
+                                    continue
 
-                        soldiers = s.execute(select(Soldier).order_by(Soldier.id.asc())).scalars().all()
-                        for soldier in soldiers:
-                            if needed_total == 0:
-                                break
-                            if _soldier_on_vacation(s, soldier.id, d):
-                                continue
-                            if _overlaps_assignment(s, soldier.id, start_at, end_at):
-                                continue
-
-                            s.execute(
-                                insert(Assignment).values(
-                                    mission_id=m.id,
-                                    soldier_id=soldier.id,
-                                    start_at=start_at,
-                                    end_at=end_at,
-                                    created_at=datetime.now(timezone.utc),
+                                s.execute(
+                                    insert(Assignment).values(
+                                        mission_id=m.id,
+                                        soldier_id=soldier.id,
+                                        start_at=start_at,
+                                        end_at=end_at,
+                                        created_at=datetime.now(timezone.utc),
+                                    )
                                 )
-                            )
-                            needed_total -= 1
-                            created_count += 1
+                                remainder -= 1
+                                created_for_slot += 1
+                                created_total_for_mission += 1
 
                 s.commit()
 
@@ -205,7 +213,11 @@ def fill_plan(payload: PlanFillPayload):
                 error_msg = f"Planner failure: {e}"
 
             results.append(
-                PlanResultItem(mission=mission_brief, created_count=created_count, error=error_msg)
+                PlanResultItem(
+                    mission=mission_brief,
+                    created_count=created_total_for_mission,
+                    error=error_msg,
+                )
             )
 
     return PlanFillResponse(day=d.isoformat(), results=results)
