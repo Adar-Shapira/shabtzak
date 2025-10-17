@@ -19,6 +19,7 @@ from app.models.soldier import Soldier
 
 from zoneinfo import ZoneInfo
 import os
+from math import floor
 
 from sqlalchemy.sql import expression as sql
 
@@ -82,8 +83,8 @@ def roster(
             joinedload(Assignment.soldier),
             joinedload(Assignment.role),
         )
-        .where(and_(Assignment.start_at >= start, Assignment.start_at < end))
-        # ORDER BY mission id, then start time, then role_id (NULLS LAST)
+        # CHANGE: "overlap with day" instead of "starts in day"
+        .where(and_(Assignment.end_at > start, Assignment.start_at < end))
         .order_by(
             Assignment.mission_id,
             Assignment.start_at,
@@ -97,6 +98,8 @@ def roster(
 
     items: List[RosterItem] = []
     for a in rows:
+        s_local = a.start_at.astimezone(LOCAL_TZ)
+        e_local = a.end_at.astimezone(LOCAL_TZ)
         items.append(
             RosterItem(
                 id=a.id,
@@ -106,13 +109,14 @@ def roster(
                 soldier_name=a.soldier.name if a.soldier else "",
                 start_at=a.start_at,
                 end_at=a.end_at,
-                start_local=_fmt_local(a.start_at),
-                end_local=_fmt_local(a.end_at),
-                start_epoch_ms=_epoch_ms(a.start_at),
-                end_epoch_ms=_epoch_ms(a.end_at),   
+                start_local=s_local.isoformat(),
+                end_local=e_local.isoformat(),
+                start_epoch_ms=int(a.start_at.timestamp() * 1000),
+                end_epoch_ms=int(a.end_at.timestamp() * 1000),
             )
         )
 
+    # mission header logic unchanged...
     top_mission = None
     if mission_id is not None:
         if rows and rows[0].mission:
@@ -123,7 +127,6 @@ def roster(
                 top_mission = {"id": m.id, "name": m.name}
 
     return RosterResponse(day=day, items=items, mission=top_mission)
-
 
 class ClearPayload(BaseModel):
     mission_id: int
@@ -180,6 +183,10 @@ class DayRosterItem(BaseModel):
     soldier_name: str
     start_at: datetime
     end_at: datetime
+    start_local: str
+    end_local: str
+    start_epoch_ms: int
+    end_epoch_ms: int
 
 class DayRosterResponse(BaseModel):
     day: str
@@ -201,7 +208,6 @@ def day_roster(
     db=Depends(get_db),
 ):
     start, end = _bounds_for_day(day)
-
     rows = (
         db.execute(
             select(Assignment)
@@ -210,7 +216,8 @@ def day_roster(
                 joinedload(Assignment.soldier),
                 joinedload(Assignment.role),
             )
-            .where(and_(Assignment.start_at >= start, Assignment.start_at < end))
+            # CHANGE: overlap filter
+            .where(and_(Assignment.end_at > start, Assignment.start_at < end))
             .order_by(
                 Assignment.mission_id,
                 Assignment.start_at,
@@ -223,6 +230,8 @@ def day_roster(
 
     items: List[DayRosterItem] = []
     for a in rows:
+        s_local = a.start_at.astimezone(LOCAL_TZ)
+        e_local = a.end_at.astimezone(LOCAL_TZ)
         items.append(
             DayRosterItem(
                 id=a.id,
@@ -232,10 +241,10 @@ def day_roster(
                 soldier_name=a.soldier.name if a.soldier else "",
                 start_at=a.start_at,
                 end_at=a.end_at,
-                start_local=_fmt_local(a.start_at),
-                end_local=_fmt_local(a.end_at),
-                start_epoch_ms=_epoch_ms(a.start_at),
-                end_epoch_ms=_epoch_ms(a.end_at),
+                start_local=s_local.isoformat(),
+                end_local=e_local.isoformat(),
+                start_epoch_ms=int(a.start_at.timestamp() * 1000),
+                end_epoch_ms=int(a.end_at.timestamp() * 1000),
             )
         )
     return DayRosterResponse(day=day, items=items)

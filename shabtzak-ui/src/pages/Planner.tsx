@@ -51,6 +51,51 @@ const APP_TZ =
   (import.meta as any)?.env?.VITE_APP_TZ ||
   Intl.DateTimeFormat().resolvedOptions().timeZone;
 
+// Format to "YYYY-MM-DD HH:mm" in a specific TZ using Intl parts
+function formatYMDHM(dtIso: string, fallbackTz: string) {
+  try {
+    const d = new Date(dtIso);
+    const parts = new Intl.DateTimeFormat(undefined, {
+      timeZone: fallbackTz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).formatToParts(d);
+
+    const get = (t: Intl.DateTimeFormatPartTypes) =>
+      parts.find(p => p.type === t)?.value ?? "";
+
+    // Many locales emit different separators; assemble explicitly:
+    const yyyy = get("year");
+    const mm = get("month");
+    const dd = get("day");
+    const hh = get("hour");
+    const min = get("minute");
+    return `${yyyy}-${mm}-${dd} ${hh}:${min}`;
+  } catch {
+    return dtIso;
+  }
+}
+
+// Prefer server-provided local strings if you added them; otherwise compute
+function fmtLocalShort(localIso: string | undefined, utcIso: string) {
+  if (localIso) return formatYMDHM(localIso, APP_TZ);
+  return formatYMDHM(utcIso, APP_TZ);
+}
+
+// Robust epoch getter (uses server epoch if present)
+function epochMs(iso: string, serverEpoch?: number) {
+  return typeof serverEpoch === "number" ? serverEpoch : new Date(iso).getTime();
+}
+
+// Stable slot key for grouping (mission + exact window)
+function slotKey(missionName: string, startMs: number, endMs: number) {
+  return `${missionName}__${startMs}__${endMs}`;
+}
+
 function fmt(dtIso: string) {
   try {
     const d = new Date(dtIso); // ISO from backend (UTC)
@@ -145,6 +190,74 @@ export default function Planner() {
     });
   }, [rows]);
 
+  type Grouped = Array<{
+    missionName: string;
+    slots: Array<{
+      key: string;
+      startLabel: string;
+      endLabel: string;
+      items: FlatRosterItem[];
+    }>;
+  }>;
+
+  const grouped: Grouped = useMemo(() => {
+    // Build: mission -> (slotKey -> items)
+    const byMission = new Map<string, Map<string, { startLabel: string; endLabel: string; items: FlatRosterItem[] }>>();
+
+    for (const r of sortedRows) {
+      const missionName = r.mission?.name ?? "";
+      const sMs = epochMs(r.start_at, (r as any).start_epoch_ms);
+      const eMs = epochMs(r.end_at, (r as any).end_epoch_ms);
+
+      const key = slotKey(missionName, sMs, eMs);
+
+      const startLabel = fmtLocalShort(r.start_local, r.start_at); // YYYY-MM-DD HH:mm
+      const endLabel   = fmtLocalShort(r.end_local,   r.end_at);
+
+      if (!byMission.has(missionName)) byMission.set(missionName, new Map());
+      const slots = byMission.get(missionName)!;
+
+      if (!slots.has(key)) {
+        slots.set(key, { startLabel, endLabel, items: [] });
+      }
+      slots.get(key)!.items.push(r);
+    }
+
+    // Convert to array form (preserve sorted order implicitly by iterating sortedRows)
+    const result: Grouped = [];
+    const missionOrder: string[] = [];
+    const seenMission = new Set<string>();
+
+    for (const r of sortedRows) {
+      const m = r.mission?.name ?? "";
+      if (!seenMission.has(m)) {
+        missionOrder.push(m);
+        seenMission.add(m);
+      }
+    }
+
+    for (const m of missionOrder) {
+      const slots = byMission.get(m)!;
+      // Keep slot insertion order (already sortedRows order)
+      const slotArr: Grouped[number]["slots"] = [];
+      const seenSlots = new Set<string>();
+      for (const r of sortedRows) {
+        const mm = r.mission?.name ?? "";
+        if (mm !== m) continue;
+        const sMs = epochMs(r.start_at, (r as any).start_epoch_ms);
+        const eMs = epochMs(r.end_at, (r as any).end_epoch_ms);
+        const k = slotKey(m, sMs, eMs);
+        if (!seenSlots.has(k)) {
+          const v = slots.get(k)!;
+          slotArr.push({ key: k, startLabel: v.startLabel, endLabel: v.endLabel, items: v.items });
+          seenSlots.add(k);
+        }
+      }
+      result.push({ missionName: m, slots: slotArr });
+    }
+
+    return result;
+  }, [sortedRows]);
 
   useEffect(() => {
     loadAllAssignments();
@@ -196,43 +309,61 @@ export default function Planner() {
 
       <div className="space-y-2">
         <h2 className="font-medium">Assignments</h2>
-        <div className="border rounded overflow-x-auto">
-          <table className="min-w-[720px] w-full text-sm">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="text-left p-2 border">Mission</th>
-                <th className="text-left p-2 border">Role</th>
-                <th className="text-left p-2 border">Soldier</th>
-                <th className="text-left p-2 border">Start</th>
-                <th className="text-left p-2 border">End</th>
-              </tr>
-            </thead>
-            <tbody>
-              {listBusy && (
+
+        {listBusy && <div className="border rounded p-3 text-gray-500">Loading…</div>}
+        {!listBusy && rows.length === 0 && (
+          <div className="border rounded p-3 text-gray-500">No assignments for the selected day.</div>
+        )}
+
+        {!listBusy && rows.length > 0 && (
+          <div className="border rounded overflow-x-auto">
+            <table className="min-w-[760px] w-full text-sm">
+              <thead className="bg-gray-50">
                 <tr>
-                  <td className="p-2 text-gray-500" colSpan={5}>Loading…</td>
+                  <th className="text-left p-2 border w-[320px]">Mission &amp; Time Slot</th>
+                  <th className="text-left p-2 border">Role</th>
+                  <th className="text-left p-2 border">Soldier</th>
                 </tr>
-              )}
-              {!listBusy && rows.length === 0 && (
-                <tr>
-                  <td className="p-2 text-gray-500" colSpan={5}>
-                    No assignments for the selected day.
-                  </td>
-                </tr>
-              )}
-              {!listBusy &&
-                sortedRows.map((r) => (
-                  <tr key={r.id} className="border-t">
-                    <td className="p-2">{r.mission?.name ?? ""}</td>
-                    <td className="p-2">{r.role ?? ""}</td>
-                    <td className="p-2">{r.soldier_name}</td>
-                    <td className="p-2">{fmtLocal(r.start_local, r.start_at)}</td>
-                    <td className="p-2">{fmtLocal(r.end_local, r.end_at)}</td>
-                  </tr>
-                ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {grouped.map((g) =>
+                  g.slots.map((slot) => {
+                    const rowsForSlot = slot.items;
+                    const headerCell = (
+                      <td className="align-top p-2 border bg-gray-50" rowSpan={rowsForSlot.length || 1}>
+                        <div className="font-semibold">{g.missionName || "—"}</div>
+                        <div className="text-xs text-gray-600 mt-1">
+                          {slot.startLabel} → {slot.endLabel}
+                        </div>
+                        <div className="text-xs text-gray-500 mt-1">
+                          {rowsForSlot.length} assignment{rowsForSlot.length !== 1 ? "s" : ""}
+                        </div>
+                      </td>
+                    );
+
+                    if (rowsForSlot.length === 0) {
+                      // Shouldn’t happen, but keep safe:
+                      return (
+                        <tr key={slot.key}>
+                          {headerCell}
+                          <td className="p-2 border italic text-gray-500" colSpan={2}>No assignees</td>
+                        </tr>
+                      );
+                    }
+
+                    return rowsForSlot.map((r, idx) => (
+                      <tr key={`${slot.key}__${r.id}`} className="border-t">
+                        {idx === 0 && headerCell}
+                        <td className="p-2 border">{r.role ?? ""}</td>
+                        <td className="p-2 border">{r.soldier_name}</td>
+                      </tr>
+                    ));
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   );
