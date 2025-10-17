@@ -13,7 +13,6 @@ from app.db import get_db, SessionLocal
 from app.models.assignment import Assignment
 from app.models.mission import Mission
 from app.models.mission_slot import MissionSlot
-
 from app.models.role import Role
 from app.models.soldier import Soldier
 
@@ -248,3 +247,43 @@ def day_roster(
             )
         )
     return DayRosterResponse(day=day, items=items)
+
+class ReassignRequest(BaseModel):
+    assignment_id: int
+    soldier_id: int
+
+@router.post("/reassign")
+def reassign_assignment(body: ReassignRequest, db: Session = Depends(get_db)):
+    a = db.get(Assignment, body.assignment_id)
+    if not a:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+
+    s = db.get(Soldier, body.soldier_id)
+    if not s:
+        raise HTTPException(status_code=404, detail="Soldier not found")
+
+    # Optional place to validate conflicts, department/role, vacations, etc.
+
+    a.soldier_id = s.id
+    db.add(a)
+    db.commit()
+    db.refresh(a)
+
+    # Build a minimal response that matches your roster item shape
+    # If you already have a helper for this, reuse it instead.
+    start_local = a.start_at.astimezone(timezone.utc).isoformat()
+    end_local = a.end_at.astimezone(timezone.utc).isoformat()
+
+    return {
+        "id": a.id,
+        "mission": {"id": a.mission.id, "name": a.mission.name} if a.mission else None,
+        "role": a.role.name if a.role else None,
+        "soldier_id": a.soldier.id if a.soldier else 0,
+        "soldier_name": a.soldier.name if a.soldier else "",
+        "start_at": a.start_at,
+        "end_at": a.end_at,
+        "start_local": start_local,
+        "end_local": end_local,
+        "start_epoch_ms": int(a.start_at.timestamp() * 1000),
+        "end_epoch_ms": int(a.end_at.timestamp() * 1000),
+    }

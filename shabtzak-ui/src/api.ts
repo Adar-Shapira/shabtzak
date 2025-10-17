@@ -115,3 +115,25 @@ export function getErrorMessage(err: unknown, fallback = "Something went wrong")
   const e = err as AxiosError<any>;
   return e?.response?.data?.detail ?? e?.message ?? fallback;
 }
+
+export type Soldier = {
+  id: number;
+  name: string;
+  department_id?: number | null;
+};
+
+export async function listSoldiers(): Promise<Soldier[]> {
+  const { data } = await api.get("/soldiers");
+  return data;
+}
+
+export type ReassignPayload = {
+  assignment_id: number;
+  soldier_id: number;
+};
+
+export async function reassignAssignment(payload: ReassignPayload) {
+  const { data } = await api.post("/assignments/reassign", payload);
+  return data;
+}
+

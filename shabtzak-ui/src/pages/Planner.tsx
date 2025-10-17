@@ -1,6 +1,9 @@
 // shabtzak-ui/src/pages/Planner.tsx
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
+import { listSoldiers, reassignAssignment, type Soldier } from "../api";
+import Modal from "../components/Modal";
+
 
 type PlanResultItem = {
   mission: { id: number; name: string };
@@ -145,6 +148,13 @@ export default function Planner() {
   const [listBusy, setListBusy] = useState(false);
   const [rows, setRows] = useState<FlatRosterItem[]>([]);
 
+  const [isChangeOpen, setIsChangeOpen] = useState(false);
+  const [allSoldiers, setAllSoldiers] = useState<Soldier[]>([]);
+  const [pendingAssignmentId, setPendingAssignmentId] = useState<number | null>(null);
+  const [changeLoading, setChangeLoading] = useState(false);
+  const [changeError, setChangeError] = useState<string | null>(null);
+
+
   async function runPlanner() {
     setBusy(true);
     setResults(null);
@@ -173,6 +183,52 @@ export default function Planner() {
       setListBusy(false);
     }
   }
+
+  async function openChangeModal(assignmentId: number) {
+    setPendingAssignmentId(assignmentId);
+    setChangeError(null);
+    setIsChangeOpen(true);
+
+    try {
+      // Only fetch once per open; if you prefer, cache across opens
+      const soldiers = await listSoldiers();
+      setAllSoldiers(soldiers);
+    } catch (e) {
+      setChangeError("Failed to load soldiers");
+    }
+  }
+
+  async function handleReassign(soldierId: number) {
+    if (!pendingAssignmentId) return;
+    setChangeLoading(true);
+    setChangeError(null);
+    try {
+      const updated = await reassignAssignment({
+        assignment_id: pendingAssignmentId,
+        soldier_id: soldierId,
+      });
+
+      // Update the local table state.
+      // Replace the roster item whose id matches updated.id
+      // The exact state variable may differ in your file.
+      // If your items live in something like `roster` or `planItems`, update that array.
+      setRows((prev: FlatRosterItem[]) =>
+        prev.map((it: FlatRosterItem) =>
+          it.id === updated.id
+            ? { ...it, soldier_id: updated.soldier_id, soldier_name: updated.soldier_name }
+            : it
+        )
+      );
+
+      setIsChangeOpen(false);
+      setPendingAssignmentId(null);
+    } catch (e: any) {
+      setChangeError(e?.response?.data?.detail ?? "Failed to reassign");
+    } finally {
+      setChangeLoading(false);
+    }
+  }
+
 
   const sortedRows = useMemo(() => {
     return [...rows].sort((a, b) => {
@@ -317,6 +373,24 @@ export default function Planner() {
 
         {!listBusy && rows.length > 0 && (
           <div className="border rounded overflow-x-auto">
+            <Modal open={isChangeOpen} onClose={() => setIsChangeOpen(false)} title="Change Soldier">
+              {changeError && <div style={{ color: "red", marginBottom: 8 }}>{changeError}</div>}
+              {changeLoading && <div>Applying change…</div>}
+              {!changeLoading && (
+                <div style={{ maxHeight: 360, overflowY: "auto" }}>
+                  {allSoldiers.length === 0 && <div>No soldiers found</div>}
+                  {allSoldiers.map((s) => (
+                    <div key={s.id} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid #eee" }}>
+                      <span>{s.name}</span>
+                      <button type="button" onClick={() => handleReassign(s.id)}>
+                        Assign
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Modal>
+
             <table className="min-w-[760px] w-full text-sm">
               <thead className="bg-gray-50">
                 <tr>
@@ -355,7 +429,19 @@ export default function Planner() {
                       <tr key={`${slot.key}__${r.id}`} className="border-t">
                         {idx === 0 && headerCell}
                         <td className="p-2 border">{r.role ?? ""}</td>
-                        <td className="p-2 border">{r.soldier_name}</td>
+                        <td>
+                          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                            <span>{r.soldier_name || "Unassigned"}</span>
+                            <button
+                              type="button"
+                              onClick={() => openChangeModal(r.id)}
+                              style={{ padding: "2px 8px" }}
+                            >
+                              Change
+                            </button>
+                          </div>
+                        </td>
+
                       </tr>
                     ));
                   })
