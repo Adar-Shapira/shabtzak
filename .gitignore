@@ -20,6 +20,7 @@ Thumbs.db
 .vscode/
 *.log
 *.dump
+*.sql
 
 # Docker / cache
 **/.pytest_cache/

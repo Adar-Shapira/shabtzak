@@ -1,5 +1,5 @@
 // shabtzak-ui/src/pages/Planner.tsx
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 
 type PlanResultItem = {
@@ -13,86 +13,143 @@ type PlanFillResponse = {
   results: PlanResultItem[];
 };
 
-type RosterItem = {
+type FlatRosterItem = {
   id: number;
+  mission: { id: number | null; name: string | null } | null;
+  role: string | null;
   soldier_id: number;
   soldier_name: string;
   start_at: string; // ISO
   end_at: string;   // ISO
+  start_local: string;   // e.g. "2025-10-19T09:00:00+03:00"
+  end_local: string;     // local Asia/Jerusalem string
+  start_epoch_ms: number;
+  end_epoch_ms: number;
 };
 
-type RosterResp = {
-  mission: { id: number; name: string };
+type FlatRosterResp = {
   day: string;
-  items: RosterItem[];
+  items: FlatRosterItem[];
 };
+
+function humanError(e: any, fallback: string) {
+  const d = e?.response?.data;
+  if (typeof d === "string") return d;
+  if (d?.detail) {
+    if (typeof d.detail === "string") return d.detail;
+    try {
+      return JSON.stringify(d.detail);
+    } catch {
+      return fallback;
+    }
+  }
+  if (e?.message) return e.message;
+  return fallback;
+}
+
+const APP_TZ =
+  (import.meta as any)?.env?.VITE_APP_TZ ||
+  Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+function fmt(dtIso: string) {
+  try {
+    const d = new Date(dtIso); // ISO from backend (UTC)
+    return new Intl.DateTimeFormat(undefined, {
+      timeZone: APP_TZ,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    }).format(d);
+  } catch {
+    return dtIso;
+  }
+}
+
+function fmtLocal(localIso: string | undefined, utcIso: string) {
+  // Prefer server-made local string (already correct & stable)
+  if (localIso) return localIso.replace("T", " ");
+  // Fallback: format UTC ISO using configured TZ (edge deployments)
+  try {
+    const d = new Date(utcIso);
+    return new Intl.DateTimeFormat(undefined, {
+      timeZone: APP_TZ,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    }).format(d);
+  } catch {
+    return utcIso;
+  }
+}
+
 
 export default function Planner() {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const [day, setDay] = useState<string>(today);
+
   const [busy, setBusy] = useState(false);
   const [results, setResults] = useState<PlanResultItem[] | null>(null);
 
-  const [rosterMissionId, setRosterMissionId] = useState<number | null>(null);
-  const [roster, setRoster] = useState<RosterResp | null>(null);
-  const [rosterBusy, setRosterBusy] = useState(false);
+  const [listBusy, setListBusy] = useState(false);
+  const [rows, setRows] = useState<FlatRosterItem[]>([]);
 
   async function runPlanner() {
     setBusy(true);
     setResults(null);
     try {
-      const { data } = await api.post<PlanFillResponse>("/plan/fill", { day });
+      const { data } = await api.post<PlanFillResponse>("/plan/fill", { day, replace: true });
       setResults(data.results);
+      await loadAllAssignments();
     } catch (e: any) {
-      const msg =
-        e?.response?.data?.detail ??
-        e?.message ??
-        "Planner failed";
-      alert(String(msg));
+      alert(humanError(e, "Planner failed"));
     } finally {
       setBusy(false);
     }
   }
 
-  async function viewRoster(missionId: number) {
-    setRosterBusy(true);
-    setRoster(null);
-    setRosterMissionId(missionId);
+  async function loadAllAssignments() {
+    setListBusy(true);
     try {
-      const { data } = await api.get<RosterResp>("/assignments/roster", {
-        params: { mission_id: missionId, day },
+      const { data } = await api.get<FlatRosterResp>("/assignments/roster", {
+        params: { day },
       });
-      setRoster(data);
+      setRows(data.items);
     } catch (e: any) {
-      const d = e?.response?.data?.detail;
-      alert(typeof d === "string" ? d : "Failed to load roster");
+      alert(humanError(e, "Failed to load assignments"));
+      setRows([]);
     } finally {
-      setRosterBusy(false);
+      setListBusy(false);
     }
   }
 
-  async function clearRoster(missionId: number) {
-    if (!confirm("Delete all assignments for this mission on the selected day?")) {
-      return;
-    }
-    try {
-      await api.post("/assignments/clear", { mission_id: missionId, day });
-      if (rosterMissionId === missionId) {
-        await viewRoster(missionId);
-      }
-      // refresh results view numbers if present
-      await runPlannerPreview(); // optional soft refresh
-    } catch (e: any) {
-      const d = e?.response?.data?.detail;
-      alert(typeof d === "string" ? d : "Failed to clear roster");
-    }
-  }
+  const sortedRows = useMemo(() => {
+    return [...rows].sort((a, b) => {
+      const mA = a.mission?.name ?? "";
+      const mB = b.mission?.name ?? "";
+      if (mA !== mB) return mA.localeCompare(mB);
 
-  async function runPlannerPreview() {
-    // optional: call /plan/fill but ignore DB writes — not implemented on server.
-    // For now, just do nothing. This is here so the UI code path remains clean.
-    return;
-  }
+      const tA = a.start_epoch_ms ?? new Date(a.start_at).getTime();
+      const tB = b.start_epoch_ms ?? new Date(b.start_at).getTime();
+      if (tA !== tB) return tA - tB;
+
+      const rA = a.role ?? "\uFFFF";
+      const rB = b.role ?? "\uFFFF";
+      return rA.localeCompare(rB);
+    });
+  }, [rows]);
+
+
+  useEffect(() => {
+    loadAllAssignments();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [day]);
 
   return (
     <div className="p-4 space-y-4">
@@ -117,7 +174,7 @@ export default function Planner() {
 
       {results && (
         <div className="space-y-2">
-          <h2 className="font-medium">Results</h2>
+          <h2 className="font-medium">Planner results</h2>
           <div className="border rounded divide-y">
             {results.map((r) => (
               <div key={r.mission.id} className="p-2 flex items-center justify-between gap-2">
@@ -131,61 +188,52 @@ export default function Planner() {
                     </div>
                   )}
                 </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => viewRoster(r.mission.id)}
-                    className="border rounded px-2 py-1 hover:bg-gray-50"
-                  >
-                    View roster
-                  </button>
-                  <button
-                    onClick={() => clearRoster(r.mission.id)}
-                    className="border rounded px-2 py-1 hover:bg-gray-50"
-                  >
-                    Clear day
-                  </button>
-                </div>
               </div>
             ))}
           </div>
         </div>
       )}
 
-      {rosterMissionId && (
-        <div className="space-y-2">
-          <h2 className="font-medium">Roster</h2>
-          {rosterBusy && <div className="text-sm text-gray-500">Loading roster…</div>}
-          {!rosterBusy && roster && (
-            <div className="border rounded overflow-x-auto">
-              <table className="min-w-[600px] w-full text-sm">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="text-left p-2">Soldier</th>
-                    <th className="text-left p-2">Start</th>
-                    <th className="text-left p-2">End</th>
+      <div className="space-y-2">
+        <h2 className="font-medium">Assignments</h2>
+        <div className="border rounded overflow-x-auto">
+          <table className="min-w-[720px] w-full text-sm">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="text-left p-2 border">Mission</th>
+                <th className="text-left p-2 border">Role</th>
+                <th className="text-left p-2 border">Soldier</th>
+                <th className="text-left p-2 border">Start</th>
+                <th className="text-left p-2 border">End</th>
+              </tr>
+            </thead>
+            <tbody>
+              {listBusy && (
+                <tr>
+                  <td className="p-2 text-gray-500" colSpan={5}>Loading…</td>
+                </tr>
+              )}
+              {!listBusy && rows.length === 0 && (
+                <tr>
+                  <td className="p-2 text-gray-500" colSpan={5}>
+                    No assignments for the selected day.
+                  </td>
+                </tr>
+              )}
+              {!listBusy &&
+                sortedRows.map((r) => (
+                  <tr key={r.id} className="border-t">
+                    <td className="p-2">{r.mission?.name ?? ""}</td>
+                    <td className="p-2">{r.role ?? ""}</td>
+                    <td className="p-2">{r.soldier_name}</td>
+                    <td className="p-2">{fmtLocal(r.start_local, r.start_at)}</td>
+                    <td className="p-2">{fmtLocal(r.end_local, r.end_at)}</td>
                   </tr>
-                </thead>
-                <tbody>
-                  {roster.items.length === 0 && (
-                    <tr>
-                      <td className="p-2 text-gray-500" colSpan={3}>
-                        No assignments for {roster.mission.name} on {roster.day}
-                      </td>
-                    </tr>
-                  )}
-                  {roster.items.map((it) => (
-                    <tr key={it.id} className="border-t">
-                      <td className="p-2">{it.soldier_name}</td>
-                      <td className="p-2">{new Date(it.start_at).toLocaleString()}</td>
-                      <td className="p-2">{new Date(it.end_at).toLocaleString()}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+                ))}
+            </tbody>
+          </table>
         </div>
-      )}
+      </div>
     </div>
   );
 }
