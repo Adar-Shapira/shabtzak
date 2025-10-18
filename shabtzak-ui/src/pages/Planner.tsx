@@ -51,9 +51,7 @@ function humanError(e: any, fallback: string) {
   return fallback;
 }
 
-const APP_TZ =
-  (import.meta as any)?.env?.VITE_APP_TZ ||
-  Intl.DateTimeFormat().resolvedOptions().timeZone;
+const APP_TZ = (import.meta as any)?.env?.VITE_APP_TZ || "UTC";
 
 // Format to "YYYY-MM-DD HH:mm" in a specific TZ using Intl parts
 function formatYMDHM(dtIso: string, fallbackTz: string) {
@@ -89,6 +87,12 @@ function fmtLocalShort(localIso: string | undefined, utcIso: string) {
   if (localIso) return formatYMDHM(localIso, APP_TZ);
   return formatYMDHM(utcIso, APP_TZ);
 }
+
+// Always format a UTC ISO timestamp into APP_TZ for consistent slot labels
+function fmtFromUTC(utcIso: string) {
+  return formatYMDHM(utcIso, APP_TZ);
+}
+
 
 // Robust epoch getter (uses server epoch if present)
 function epochMs(iso: string, serverEpoch?: number) {
@@ -330,8 +334,10 @@ export default function Planner() {
 
       const key = slotKey(missionName, sMs, eMs);
 
-      const startLabel = fmtLocalShort(r.start_local, r.start_at); // YYYY-MM-DD HH:mm
-      const endLabel   = fmtLocalShort(r.end_local,   r.end_at);
+      // Prefer server-calculated local if provided; otherwise format UTC with APP_TZ
+      const startLabel = r.start_local ? formatYMDHM(r.start_local, APP_TZ) : formatYMDHM(r.start_at, APP_TZ);
+      const endLabel   = r.end_local   ? formatYMDHM(r.end_local,   APP_TZ) : formatYMDHM(r.end_at,   APP_TZ);
+
 
       if (!byMission.has(missionName)) byMission.set(missionName, new Map());
       const slots = byMission.get(missionName)!;
@@ -492,12 +498,16 @@ export default function Planner() {
                     }}
                   >
                     <span>
+                      {s.name}
+                      {s.roles && s.roles.length > 0 ? ` (${s.roles.map(r => r.name).join(", ")})` : ""}
                       {(() => {
-                        const base = `${s.name}${
-                          s.roles && s.roles.length > 0 ? ` (${s.roles.map(r => r.name).join(", ")})` : ""
-                        }`;
                         const warns = computeCandidateWarnings(s);
-                        return warns.length ? `${base} *${warns.join(", ")}` : base;
+                        if (!warns.length) return null;
+                        return (
+                          <span style={{ color: "red", fontWeight: 600, marginLeft: 6 }}>
+                            *{warns.join(", ")}
+                          </span>
+                        );
                       })()}
                     </span>
                     <button type="button" onClick={() => handleReassign(s.id)}>
