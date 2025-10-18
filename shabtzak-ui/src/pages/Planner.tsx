@@ -179,6 +179,205 @@ export default function Planner() {
     }
   }
 
+    // return YYYY-MM-DD offset by n days from a base YYYY-MM-DD
+  function shiftDay(baseISO: string, days: number): string {
+    const [y, m, d] = baseISO.split("-").map(Number);
+    const dt = new Date(Date.UTC(y, m - 1, d)); // safe, no tz drift
+    dt.setUTCDate(dt.getUTCDate() + days);
+    const yy = dt.getUTCFullYear();
+    const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+    const dd = String(dt.getUTCDate()).padStart(2, "0");
+    return `${yy}-${mm}-${dd}`;
+  }
+
+  async function exportCsv() {
+    setBusy(true);
+    try {
+      // Days: selected day and the previous two, oldest → newest
+      const daysISO = [0, -1, -2].map((n) => shiftDay(day, n)).reverse();
+
+      // Labels for headers: dd/MM (no year)
+      const dayLabel = (iso: string) => {
+        const [y, m, d] = iso.split("-").map(Number);
+        const dt = new Date(Date.UTC(y, m - 1, d));
+        const dd = String(dt.getUTCDate()).padStart(2, "0");
+        const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+        return `${dd}/${mm}`;
+      };
+      const dayHeaders = daysISO.map(dayLabel);
+
+      // Fetch rosters for the 3 days
+      const responses = await Promise.all(
+        daysISO.map((d) =>
+          api
+            .get<FlatRosterResp>("/assignments/roster", { params: { day: d } })
+            .then((r) => ({ dayISO: d, items: r.data.items }))
+        )
+      );
+
+      // Helper: HH:MM in app tz from ISO
+      const hhmmFrom = (isoLike: string) => {
+        const dt = new Date(isoLike);
+        const parts = new Intl.DateTimeFormat(undefined, {
+          timeZone: APP_TZ,
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: false,
+        }).formatToParts(dt);
+        const get = (t: Intl.DateTimeFormatPartTypes) =>
+          parts.find((p) => p.type === t)?.value ?? "";
+        return `${get("hour")}:${get("minute")}`;
+      };
+
+      // Parse "HH:MM-HH:MM" -> minutes since midnight for start & end
+      const parseHoursToMinutes = (hours: string) => {
+        const [startStr, endStr] = hours.split("-");
+        const [sh, sm] = (startStr || "00:00").split(":").map(Number);
+        const [eh, em] = (endStr || "00:00").split(":").map(Number);
+        const startMin = (sh || 0) * 60 + (sm || 0);
+        const endMinRaw = (eh || 0) * 60 + (em || 0);
+        // Overnight shift normalization for comparisons (e.g., 22:00-06:00)
+        const endMin = endMinRaw < startMin ? endMinRaw + 24 * 60 : endMinRaw;
+        return { startMin, endMin };
+      };
+
+      // Priority for Role sorting
+      const rolePriority = (role: string) => {
+        const r = (role || "").toLowerCase();
+        if (r === "commander") return 0;
+        if (r === "driver") return 1;
+        if (r === "officer") return 2;
+        if (r.trim() === "") return 9; // blank roles last
+        return 3; // other named roles in-between (alphabetical tie-break)
+      };
+
+      const minutesSinceMidnight = (isoLike: string) => {
+        const dt = new Date(isoLike);
+        const parts = new Intl.DateTimeFormat(undefined, {
+          timeZone: APP_TZ,
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: false,
+        }).formatToParts(dt);
+        const get = (t: Intl.DateTimeFormatPartTypes) =>
+          parts.find((p) => p.type === t)?.value ?? "00";
+        const hh = parseInt(get("hour"), 10) || 0;
+        const mm = parseInt(get("minute"), 10) || 0;
+        return hh * 60 + mm;
+      };
+
+      // Build rows keyed by unique slot: mission + role + hours
+      // hours is "HH:MM-HH:MM" in APP_TZ
+      type RowRec = {
+        mission: string;
+        role: string;
+        hours: string;
+        byDay: Record<string, string[]>; // collect names
+        startMin: number;
+        endMin: number;
+      };
+
+      const rowsMap = new Map<string, RowRec>();
+
+      for (const resp of responses) {
+        for (const it of resp.items) {
+          const mission = it.mission?.name ?? "";
+          const role = it.role ?? "";
+
+          // Prefer server-provided local timestamps if present
+          const startIsoLocal = it.start_local || it.start_at;
+          const endIsoLocal = it.end_local || it.end_at;
+
+          const startHM = hhmmFrom(startIsoLocal);
+          const endHM = hhmmFrom(endIsoLocal);
+          const hours = `${startHM}-${endHM}`;
+
+          const key = `${mission}__${role}__${hours}`;
+          if (!rowsMap.has(key)) {
+            const { startMin, endMin } = parseHoursToMinutes(hours);
+            rowsMap.set(key, {
+              mission,
+              role,
+              hours,
+              byDay: {},
+              startMin,
+              endMin,
+            });
+          }
+          const cell = rowsMap.get(key)!.byDay[resp.dayISO] || [];
+          cell.push(it.soldier_name || "");
+          rowsMap.get(key)!.byDay[resp.dayISO] = cell;
+        }
+      }
+
+      // Sort rows: Mission → Hours → Role
+      const rowsArr = Array.from(rowsMap.values()).sort((a, b) => {
+        // 1) Mission (A→Z)
+        if (a.mission !== b.mission) return a.mission.localeCompare(b.mission);
+
+        // 2) Hours (chronological within the mission, using start then end)
+        if (a.startMin !== b.startMin) return a.startMin - b.startMin;
+        if (a.endMin !== b.endMin) return a.endMin - b.endMin;
+
+        // 3) Role (priority order, then alphabetical for ties; blank last)
+        const rpA = rolePriority(a.role);
+        const rpB = rolePriority(b.role);
+        if (rpA !== rpB) return rpA - rpB;
+
+        // tie-break by role name to keep deterministic output
+        return a.role.localeCompare(b.role);
+      });
+
+      // CSV: columns => Mission, Role, Hours, <dd/MM>, <dd/MM>, <dd/MM>
+      const header = ["Mission", "Hours", "Role", ...dayHeaders];
+
+      // CSV escape helper
+      const esc = (v: string) => {
+        const s = String(v ?? "");
+        if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+        return s;
+      };
+
+      const lines: string[] = [];
+      lines.push(header.map(esc).join(","));
+
+      for (const r of rowsArr) {
+        const cells = [
+          r.mission,
+          r.hours,
+          r.role,
+          ...daysISO.map((d) => {
+            const arr = r.byDay[d] || [];
+            // optional: stable, deduped, alphabetical inside the cell
+            const unique = Array.from(new Set(arr)).sort((a, b) => a.localeCompare(b));
+            return unique.join(" | "); // or ", " if you prefer
+          }),
+        ];
+        lines.push(cells.map(esc).join(","));
+      }
+
+      const csv = lines.join("\n");
+
+      // Download
+      const bom = "\uFEFF";
+      const blob = new Blob([bom + csv], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const first = daysISO[0];
+      const last = daysISO[daysISO.length - 1];
+      a.href = url;
+      a.download = `assignments_${first}_to_${last}_by_slot.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e: any) {
+      alert(humanError(e, "Failed to export CSV"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function deletePlanForDay() {
     setBusy(true);
     try {
@@ -520,6 +719,14 @@ export default function Planner() {
           style={{ marginLeft: 8 }}
         >
           {busy ? "Working…" : "Delete Plan"}
+        </button>
+        <button
+          onClick={exportCsv}
+          disabled={busy || listBusy}
+          className="border rounded px-3 py-1 hover:bg-gray-50 disabled:opacity-50"
+          style={{ marginLeft: 8 }}
+        >
+          {busy ? "Working…" : "Export csv"}
         </button>
       </div>
 
