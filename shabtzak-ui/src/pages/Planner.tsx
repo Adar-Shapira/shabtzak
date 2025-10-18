@@ -120,6 +120,7 @@ export default function Planner() {
   const [allSoldiers, setAllSoldiers] = useState<Soldier[]>([]);
   const [visibleCandidates, setVisibleCandidates] = useState<Soldier[]>([]);
   const [pendingAssignmentId, setPendingAssignmentId] = useState<number | null>(null);
+  const [candidateSearch, setCandidateSearch] = useState<string>("");
   const [changeLoading, setChangeLoading] = useState(false);
   const [changeError, setChangeError] = useState<string | null>(null);
   const [pendingRoleName, setPendingRoleName] = useState<string | null>(null);
@@ -130,6 +131,16 @@ export default function Planner() {
   const [warnings, setWarnings] = useState<PlannerWarning[]>([])
   const [warnLoading, setWarnLoading] = useState(false)
   const [warnError, setWarnError] = useState<string | null>(null)
+
+    const filteredCandidates = useMemo(() => {
+    const q = candidateSearch.trim().toLowerCase();
+    if (!q) return visibleCandidates;
+    return visibleCandidates.filter(s => {
+      const name = (s.name || "").toLowerCase();
+      const roles = (s.roles || []).map(r => r.name.toLowerCase()).join(" ");
+      return name.includes(q) || roles.includes(q);
+    });
+  }, [visibleCandidates, candidateSearch]);
 
   async function loadWarnings(forDay: string) {
     try {
@@ -262,6 +273,7 @@ export default function Planner() {
     setPendingMissionId(missionId);
     setChangeError(null);
     setIsChangeOpen(true);
+    setCandidateSearch("");
 
     try {
       const soldiers = await listSoldiers();
@@ -585,8 +597,27 @@ export default function Planner() {
               {changeLoading && <div>Applying change…</div>}
               {!changeLoading && (
                 <div style={{ maxHeight: 360, overflowY: "auto" }}>
-                  {visibleCandidates.length === 0 && <div>No soldiers found</div>}
-                  {visibleCandidates.map((s) => (
+                  <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                    <input
+                      type="text"
+                      value={candidateSearch}
+                      onChange={(e) => setCandidateSearch(e.target.value)}
+                      placeholder="Search soldiers…"
+                      className="border rounded px-2 py-1 w-full"
+                    />
+                    {candidateSearch && (
+                      <button
+                        type="button"
+                        onClick={() => setCandidateSearch("")}
+                        className="border rounded px-2 py-1"
+                        title="Clear search"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                  {filteredCandidates.length === 0 && <div>No soldiers found</div>}
+                  {filteredCandidates.map((s) => (
                   <div
                     key={s.id}
                     style={{

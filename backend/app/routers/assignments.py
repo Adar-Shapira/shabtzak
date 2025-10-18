@@ -84,8 +84,8 @@ def roster(
             joinedload(Assignment.soldier),
             joinedload(Assignment.role),
         )
-        # CHANGE: "overlap with day" instead of "starts in day"
-        .where(and_(Assignment.end_at > start, Assignment.start_at < end))
+        # Only assignments whose start is on this local day
+        .where(and_(Assignment.start_at >= start, Assignment.start_at < end))
         .order_by(
             Assignment.mission_id,
             Assignment.start_at,
