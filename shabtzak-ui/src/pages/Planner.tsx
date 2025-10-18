@@ -304,9 +304,9 @@ export default function Planner() {
               endMin,
             });
           }
-          const cell = rowsMap.get(key)!.byDay[resp.dayISO] || [];
-          cell.push(it.soldier_name || "");
-          rowsMap.get(key)!.byDay[resp.dayISO] = cell;
+          // append (preserve encounter order)
+          const byDay = rowsMap.get(key)!.byDay;
+          (byDay[resp.dayISO] ||= []).push(it.soldier_name || "");
         }
       }
 
@@ -341,19 +341,20 @@ export default function Planner() {
       const lines: string[] = [];
       lines.push(header.map(esc).join(","));
 
+      // For each slot, emit N rows where N = max assignees among the 3 days
       for (const r of rowsArr) {
-        const cells = [
-          r.mission,
-          r.hours,
-          r.role,
-          ...daysISO.map((d) => {
-            const arr = r.byDay[d] || [];
-            // optional: stable, deduped, alphabetical inside the cell
-            const unique = Array.from(new Set(arr)).sort((a, b) => a.localeCompare(b));
-            return unique.join(" | "); // or ", " if you prefer
-          }),
-        ];
-        lines.push(cells.map(esc).join(","));
+        const counts = daysISO.map((d) => (r.byDay[d]?.length ?? 0));
+        const maxRows = Math.max(...counts, 1);
+
+        for (let i = 0; i < maxRows; i++) {
+          const cells = [
+            r.mission,
+            r.hours,
+            r.role,
+            ...daysISO.map((d) => (r.byDay[d]?.[i] ?? "")),
+          ];
+          lines.push(cells.map(esc).join(","));
+        }
       }
 
       const csv = lines.join("\n");
