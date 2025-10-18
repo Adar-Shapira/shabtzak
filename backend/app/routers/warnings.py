@@ -1,11 +1,13 @@
 # backend/app/routers/warnings.py
 import os
+from datetime import date, datetime, time, timedelta
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import bindparam, text
+from sqlalchemy import text
 from sqlalchemy.orm import Session
-from sqlalchemy.types import DateTime
+
+from zoneinfo import ZoneInfo
 
 from app.db import get_db
 from app.schemas.warnings import WarningItem
@@ -17,10 +19,14 @@ APP_TZ = os.getenv("APP_TZ", "UTC")
 SQL = """
 WITH base AS (
   SELECT
-    a.id AS assignment_id, a.soldier_id, a.mission_id, a.start_at, a.end_at
+    a.id            AS assignment_id,
+    a.soldier_id,
+    a.mission_id,
+    a.start_at,
+    a.end_at
   FROM assignments a
-  WHERE a.start_at >= COALESCE(CAST(:from_ts AS timestamptz), '-infinity'::timestamptz)
-    AND a.end_at   <= COALESCE(CAST(:to_ts   AS timestamptz),  'infinity'::timestamptz)
+  WHERE (:from_ts IS NULL OR a.start_at >= :from_ts)
+    AND (:to_ts   IS NULL OR a.end_at   <= :to_ts)
 ),
 ordered_cte AS (
   SELECT
@@ -29,7 +35,8 @@ ordered_cte AS (
   FROM base b
 ),
 overlap_cte AS (
-  SELECT o.assignment_id, o.soldier_id, o.mission_id, o.start_at, o.end_at, o.prev_end_at
+  SELECT
+    o.assignment_id, o.soldier_id, o.mission_id, o.start_at, o.end_at, o.prev_end_at
   FROM ordered_cte o
   WHERE o.prev_end_at IS NOT NULL
     AND o.start_at < o.prev_end_at
@@ -99,23 +106,36 @@ JOIN missions m ON m.id = x.mission_id
 ORDER BY type ASC, soldier_name ASC, start_at_local DESC
 """
 
+def _compute_day_bounds_utc(day: date, app_tz: str) -> tuple[datetime, datetime]:
+    """
+    Given a calendar day in APP_TZ, return (from_ts_utc, to_ts_utc) that bound that local day.
+    from_ts inclusive at 00:00:00, to_ts inclusive at 23:59:59.999999.
+    """
+    tz = ZoneInfo(app_tz)
+    start_local = datetime.combine(day, time.min).replace(tzinfo=tz)
+    end_local = datetime.combine(day, time.max).replace(tzinfo=tz)
+    return (start_local.astimezone(ZoneInfo("UTC")), end_local.astimezone(ZoneInfo("UTC")))
+
 @router.get("/warnings", response_model=List[WarningItem])
 def get_warnings(
     db: Session = Depends(get_db),
+    # NEW: let the client pass the plan day (same as /assignments/roster?day=YYYY-MM-DD)
+    day: Optional[date] = Query(
+        None,
+        description="Day of plan (YYYY-MM-DD) in app timezone; results limited to that day."
+    ),
+    # legacy filters still supported; if 'day' is passed, these are ignored
     from_ts: Optional[str] = Query(None, description="ISO timestamp filter, inclusive (UTC)"),
     to_ts: Optional[str]   = Query(None, description="ISO timestamp filter, inclusive (UTC)"),
 ):
-    # Bind param types so SQLAlchemy/psycopg know these are timestamptz when non-null
-    stmt = text(SQL).bindparams(
-        bindparam("from_ts", type_=DateTime(timezone=True)),
-        bindparam("to_ts",   type_=DateTime(timezone=True)),
-        bindparam("tz"),
-    )
+    # If a plan day is provided, compute UTC bounds for that local day and override from/to.
+    if day is not None:
+        from_dt_utc, to_dt_utc = _compute_day_bounds_utc(day, APP_TZ)
+        bind = {"from_ts": from_dt_utc, "to_ts": to_dt_utc, "tz": APP_TZ}
+    else:
+        bind = {"from_ts": from_ts, "to_ts": to_ts, "tz": APP_TZ}
 
-    rows = db.execute(
-        stmt,
-        {"from_ts": from_ts, "to_ts": to_ts, "tz": APP_TZ},
-    ).mappings().all()
+    rows = db.execute(text(SQL), bind).mappings().all()
 
     out: List[WarningItem] = []
     for r in rows:

@@ -162,18 +162,24 @@ export async function getSoldierMissionHistory(soldierId: number): Promise<Missi
   return res.data as MissionHistoryItem[]
 }
 
+// keep your existing imports and api instance
+
 export type PlannerWarning = {
-  type: "RESTRICTED" | "OVERLAP" | "REST"
-  soldier_id: number
-  soldier_name: string
-  mission_id: number
-  mission_name: string
-  start_at: string
-  end_at: string
-  details?: string | null
+  type: "RESTRICTED" | "OVERLAP" | "REST";
+  soldier_id: number;
+  soldier_name: string;
+  mission_id: number;
+  mission_name: string;
+  start_at: string; // server-formatted local string
+  end_at: string;   // server-formatted local string
+  details: string | null;
+};
+
+// UPDATED: now accepts the plan day and sends it as a query param
+export async function getPlannerWarnings(day: string): Promise<PlannerWarning[]> {
+  const { data } = await api.get<PlannerWarning[]>("/plan/warnings", {
+    params: { day }, // <-- critical line
+  });
+  return data;
 }
 
-export async function getPlannerWarnings(params?: { from_ts?: string; to_ts?: string }): Promise<PlannerWarning[]> {
-  const res = await api.get("/plan/warnings", { params })
-  return res.data as PlannerWarning[]
-}

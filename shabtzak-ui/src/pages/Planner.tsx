@@ -123,22 +123,26 @@ export default function Planner() {
   const [warnLoading, setWarnLoading] = useState(false)
   const [warnError, setWarnError] = useState<string | null>(null)
 
-  async function loadWarnings() {
+  async function loadWarnings(forDay: string) {
     try {
-      setWarnLoading(true)
-      setWarnError(null)
-      const items = await getPlannerWarnings()
-      setWarnings(items)
+      setWarnLoading(true);
+      setWarnError(null);
+      const items = await getPlannerWarnings(forDay); // <-- pass day
+      setWarnings(items);
     } catch (e: any) {
-      setWarnError(e?.message || "Failed to load warnings")
+      setWarnError(e?.message || "Failed to load warnings");
     } finally {
-      setWarnLoading(false)
+      setWarnLoading(false);
     }
   }
 
+
   useEffect(() => {
-    loadWarnings()
-  }, [])
+    // load warnings whenever the selected day changes
+    loadWarnings(day);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [day]);
+
 
 
   async function runPlanner() {
@@ -148,6 +152,7 @@ export default function Planner() {
       const { data } = await api.post<PlanFillResponse>("/plan/fill", { day, replace: true });
       setResults(data.results);
       await loadAllAssignments();
+      await loadWarnings(day);
     } catch (e: any) {
       alert(humanError(e, "Planner failed"));
     } finally {
