@@ -1,7 +1,7 @@
 // shabtzak-ui/src/pages/Planner.tsx
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
-import { listSoldiers, reassignAssignment, type Soldier } from "../api";
+import { listSoldiers, reassignAssignment, type Soldier, clearPlan } from "../api";
 import Modal from "../components/Modal";
 import { getPlannerWarnings, type PlannerWarning } from "../api"
 import { listSoldierVacations, type Vacation } from "../api";
@@ -163,6 +163,20 @@ export default function Planner() {
       await loadWarnings(day);
     } catch (e: any) {
       alert(humanError(e, "Planner failed"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deletePlanForDay() {
+    setBusy(true);
+    try {
+      await clearPlan(day);
+      setResults(null);
+      await loadAllAssignments();
+      await loadWarnings(day);
+    } catch (e: any) {
+      alert(humanError(e, "Failed to delete plan for the day"));
     } finally {
       setBusy(false);
     }
@@ -486,6 +500,14 @@ export default function Planner() {
           className="border rounded px-3 py-1 hover:bg-gray-50 disabled:opacity-50"
         >
           {busy ? "Planning…" : "Fill plan for day"}
+        </button>
+        <button
+          onClick={deletePlanForDay}
+          disabled={busy}
+          className="border rounded px-3 py-1 hover:bg-gray-50 disabled:opacity-50"
+          style={{ marginLeft: 8 }}
+        >
+          {busy ? "Working…" : "Delete Plan"}
         </button>
       </div>
 

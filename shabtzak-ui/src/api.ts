@@ -183,6 +183,14 @@ export async function getPlannerWarnings(day: string): Promise<PlannerWarning[]>
   return data;
 }
 
+export async function clearPlan(day: string, missionIds?: number[]): Promise<void> {
+  const body: any = { day };
+  if (Array.isArray(missionIds) && missionIds.length > 0) {
+    body.mission_ids = missionIds;
+  }
+  await api.post("/assignments/clear", body);
+}
+
 export type Vacation = {
   id?: number;
   soldier_id: number;

@@ -129,52 +129,28 @@ def roster(
 
     return RosterResponse(day=day, items=items, mission=top_mission)
 
-class ClearPayload(BaseModel):
-    mission_id: int
-    day: date
-
-    @field_validator("mission_id")
-    @classmethod
-    def _v_mission_id(cls, v: int) -> int:
-        if v < 1:
-            raise ValueError("mission_id must be positive")
-        return v
+class ClearRequest(BaseModel):
+    day: str  # YYYY-MM-DD
+    mission_ids: Optional[List[int]] = None
 
 @router.post("/clear")
-def clear_day_for_mission(payload: ClearPayload):
-    with SessionLocal() as s:
-        m = s.get(Mission, payload.mission_id)
-        if not m:
-            raise HTTPException(404, "Mission not found")
+def clear_assignments_for_day(req: ClearRequest, db: Session = Depends(get_db)):
+    # use the same local-day bounds logic as roster
+    start_utc, end_utc = _day_bounds(req.day)
 
-        slots = s.query(MissionSlot).filter(MissionSlot.mission_id == m.id).all()
-        if not slots:
-            return {"deleted": 0}
+    stmt = delete(Assignment).where(
+        and_(
+            Assignment.end_at > start_utc,   # overlaps the day
+            Assignment.start_at < end_utc,
+        )
+    )
+    if req.mission_ids:
+        stmt = stmt.where(Assignment.mission_id.in_(req.mission_ids))
 
-        total_deleted = 0
-        for slot in slots:
-            # slot times are local; convert to UTC window for overlap delete
-            start_local = datetime.combine(payload.day, slot.start_time).replace(tzinfo=LOCAL_TZ)
-            end_local = datetime.combine(payload.day, slot.end_time).replace(tzinfo=LOCAL_TZ)
-            if end_local <= start_local:
-                end_local += timedelta(days=1)
-            start_dt = start_local.astimezone(timezone.utc)
-            end_dt   = end_local.astimezone(timezone.utc)
-
-            res = s.execute(
-                delete(Assignment).where(
-                    and_(
-                        Assignment.mission_id == m.id,
-                        Assignment.end_at > start_dt,
-                        Assignment.start_at < end_dt,
-                    )
-                )
-            )
-            total_deleted += res.rowcount or 0
-
-        s.commit()
-        return {"deleted": total_deleted}
-    
+    res = db.execute(stmt)
+    db.commit()
+    deleted_count = res.rowcount or 0
+    return {"day": req.day, "deleted": deleted_count}    
 
 class DayRosterItem(BaseModel):
     id: int
