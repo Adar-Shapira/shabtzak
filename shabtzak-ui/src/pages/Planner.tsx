@@ -175,6 +175,65 @@ export default function Planner() {
     }
   }
 
+    // === Candidate warning helpers for Change Soldier modal ===
+  const EIGHT_HOURS_MS = 8 * 60 * 60 * 1000;
+
+  function toMs(iso: string) {
+    return new Date(iso).getTime();
+  }
+
+  /**
+   * Given a soldier, check if assigning them to the currently pending assignment
+   * (pendingAssignmentId) would create an OVERLAP or <8h REST issue
+   * based on the current day's rows in memory.
+   */
+  function computeCandidateWarnings(s: Soldier): string[] {
+    if (!pendingAssignmentId) return [];
+
+    // The assignment we’re trying to fill
+    const target = rows.find(r => r.id === pendingAssignmentId);
+    if (!target) return [];
+
+    const candStart = (target as any).start_epoch_ms ?? toMs(target.start_at);
+    const candEnd   = (target as any).end_epoch_ms   ?? toMs(target.end_at);
+
+    // Soldier’s existing assignments for the selected day we’ve already loaded
+    const existing = rows.filter(r => r.soldier_id === s.id);
+
+    // 1) OVERLAP: if candidate window intersects any existing window
+    const hasOverlap = existing.some(r => {
+      const sMs = (r as any).start_epoch_ms ?? toMs(r.start_at);
+      const eMs = (r as any).end_epoch_ms   ?? toMs(r.end_at);
+      return candStart < eMs && candEnd > sMs;
+    });
+
+    // 2) REST: include candidate among soldier’s intervals and check adjacent gaps
+    const intervals = existing
+      .map(r => ({
+        start: (r as any).start_epoch_ms ?? toMs(r.start_at),
+        end:   (r as any).end_epoch_ms   ?? toMs(r.end_at),
+      }))
+      .concat([{ start: candStart, end: candEnd }])
+      .sort((a, b) => a.start - b.start);
+
+    let hasRestViolation = false;
+    for (let i = 0; i < intervals.length - 1; i++) {
+      const a = intervals[i];
+      const b = intervals[i + 1];
+      const gap = b.start - a.end;
+      // “REST” means non-negative gap but less than 8 hours.
+      if (gap >= 0 && gap < EIGHT_HOURS_MS) {
+        hasRestViolation = true;
+        break;
+      }
+    }
+
+    const labels: string[] = [];
+    if (hasOverlap) labels.push("OVERLAP WARNING");
+    if (hasRestViolation) labels.push("REST WARNING");
+    return labels;
+  }
+
   async function openChangeModal(assignmentId: number, roleName: string | null, missionId: number | null) {
     setPendingAssignmentId(assignmentId);
     setPendingRoleName(roleName);
@@ -421,15 +480,30 @@ export default function Planner() {
                 <div style={{ maxHeight: 360, overflowY: "auto" }}>
                   {allSoldiers.length === 0 && <div>No soldiers found</div>}
                   {allSoldiers.map((s) => (
-                    <div key={s.id} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid #eee" }}>
-                      <span>
-                        {s.name}
-                        {s.roles && s.roles.length > 0 ? ` (${s.roles.map(r => r.name).join(", ")})` : ""}
-                      </span>
-                      <button type="button" onClick={() => handleReassign(s.id)}>
-                        Assign
-                      </button>
-                    </div>
+                  <div
+                    key={s.id}
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      padding: "6px 0",
+                      borderBottom: "1px solid #eee",
+                      alignItems: "center",
+                      gap: "8px",
+                    }}
+                  >
+                    <span>
+                      {(() => {
+                        const base = `${s.name}${
+                          s.roles && s.roles.length > 0 ? ` (${s.roles.map(r => r.name).join(", ")})` : ""
+                        }`;
+                        const warns = computeCandidateWarnings(s);
+                        return warns.length ? `${base} *${warns.join(", ")}` : base;
+                      })()}
+                    </span>
+                    <button type="button" onClick={() => handleReassign(s.id)}>
+                      Assign
+                    </button>
+                  </div>
                   ))}
                 </div>
               )}
