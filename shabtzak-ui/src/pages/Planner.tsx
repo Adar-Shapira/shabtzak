@@ -217,8 +217,15 @@ export default function Planner() {
         )
       );
 
+      // Also refresh from server, in case slot groupings/times changed
+      await loadAllAssignments();
+
+      // IMPORTANT: refresh warnings for the currently selected day
+      await loadWarnings(day);
+
       setIsChangeOpen(false);
       setPendingAssignmentId(null);
+
     } catch (e: any) {
       setChangeError(e?.response?.data?.detail ?? "Failed to reassign");
     } finally {
