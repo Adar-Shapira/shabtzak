@@ -147,3 +147,17 @@ export async function putSoldierMissionRestrictions(soldierId: number, missionId
   const { data } = await api.put(`/soldiers/${soldierId}/mission_restrictions`, { mission_ids: missionIds });
   return data;
 }
+
+export type MissionHistoryItem = {
+  mission_id: number
+  mission_name: string
+  slot_date?: string
+  start_time?: string
+  end_time?: string
+  fellow_soldiers: string[]
+}
+
+export async function getSoldierMissionHistory(soldierId: number): Promise<MissionHistoryItem[]> {
+  const res = await api.get(`/soldiers/${soldierId}/mission-history`)
+  return res.data as MissionHistoryItem[]
+}

@@ -5,6 +5,7 @@ import { api } from "../api";
 import Modal from "../components/Modal";
 import { useDisclosure } from "../hooks/useDisclosure";
 import { listMissions, getSoldierMissionRestrictions, putSoldierMissionRestrictions, type Mission } from "../api";
+import SoldierHistoryModal from "../components/SoldierHistoryModal"
 
 
 type Role = { 
@@ -82,6 +83,9 @@ export default function SoldiersPage() {
 
     const restrDlg = useDisclosure(false);
     const [restrSoldier, setRestrSoldier] = useState<Soldier | null>(null);
+
+    const [historyFor, setHistoryFor] = useState<{ id: number; name: string } | null>(null)
+
 
     const openRestrictions = async (s: Soldier) => {
     setErr(null);
@@ -988,25 +992,31 @@ export default function SoldiersPage() {
                                         <td>
                                             <button onClick={() => openVacations(s)}>Manage</button>
                                         </td>
-
+                                        <td>
+                                            <button onClick={() => setHistoryFor({ id: s.id, name: s.name })}>
+                                                History
+                                            </button>
+                                        </td>
                                         {/* actions */}
                                         <td>
-                                            {isEditing ? (
+                                        {isEditing ? (
                                             <>
-                                                <button onClick={() => saveEdit(s.id)}>Save</button>
-                                                <button onClick={cancelEdit} style={{ marginLeft: 8 }}>Cancel</button>
+                                            <button onClick={() => saveEdit(s.id)}>Save</button>
+                                            <button onClick={cancelEdit} style={{ marginLeft: 8 }}>Cancel</button>
                                             </>
-                                            ) : (
+                                        ) : (
                                             <>
-                                                <button onClick={() => startEdit(s)}>Edit</button>
-                                                <button
+                                            <button onClick={() => startEdit(s)} style={{ marginLeft: 8 }}>
+                                                Edit
+                                            </button>
+                                            <button
                                                 onClick={() => removeSoldier(s.id)}
                                                 style={{ marginLeft: 8, color: "crimson" }}
-                                                >
+                                            >
                                                 Delete
-                                                </button>
+                                            </button>
                                             </>
-                                            )}
+                                        )}
                                         </td>
                                         </tr>
                                     );
@@ -1035,6 +1045,16 @@ export default function SoldiersPage() {
                         {/* ... you can copy the table above and replace `list` with `unassigned` */}
                     </details>
                     )}
+
+                    {historyFor && (
+                    <SoldierHistoryModal
+                        soldierId={historyFor.id}
+                        soldierName={historyFor.name}
+                        isOpen={true}
+                        onClose={() => setHistoryFor(null)}
+                    />
+                    )}
+
                 </>
             )}
 
