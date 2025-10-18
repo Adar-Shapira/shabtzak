@@ -382,9 +382,10 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
     for m in mission_list:
         try:
             slots: List[MissionSlot] = sorted(m.slots, key=lambda s: (s.start_time, s.end_time))
-            reqs: List[MissionRequirement] = m.requirements
+            reqs: List[MissionRequirement] = m.requirements or []
 
-            if not slots or not reqs:
+            # Skip only if there are no slots
+            if not slots:
                 results.append(
                     PlanResultItem(mission={"id": m.id, "name": m.name}, created_count=0, error=None)
                 )

@@ -1,7 +1,17 @@
 // shabtzak-ui/src/pages/Planner.tsx
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
-import { listSoldiers, reassignAssignment, type Soldier, clearPlan } from "../api";
+import {
+  listSoldiers,
+  reassignAssignment,
+  type Soldier,
+  clearPlan,
+  listMissions,
+  listMissionSlots,
+  type Mission,
+  type MissionSlot,
+} from "../api";
+
 import Modal from "../components/Modal";
 import { getPlannerWarnings, type PlannerWarning } from "../api"
 import { listSoldierVacations, type Vacation } from "../api";
@@ -132,7 +142,11 @@ export default function Planner() {
   const [warnLoading, setWarnLoading] = useState(false)
   const [warnError, setWarnError] = useState<string | null>(null)
 
-    const filteredCandidates = useMemo(() => {
+  // missions and their slot patterns
+  const [allMissions, setAllMissions] = useState<Mission[]>([]);
+  const [slotsByMission, setSlotsByMission] = useState<Map<number, MissionSlot[]>>(new Map());
+
+  const filteredCandidates = useMemo(() => {
     const q = candidateSearch.trim().toLowerCase();
     if (!q) return visibleCandidates;
     return visibleCandidates.filter(s => {
@@ -628,49 +642,80 @@ export default function Planner() {
     }>;
   }>;
 
+  function labelFor(dayISO: string, hhmmss: string) {
+    return `${dayISO} ${hhmmss.slice(0,5)}`;
+  }
+
+  function isOvernight(startHHMMSS: string, endHHMMSS: string) {
+    return startHHMMSS.slice(0,5) > endHHMMSS.slice(0,5);
+  }
+
+  function nextDayISO(dayISO: string) {
+    return shiftDay(dayISO, 1);
+  }
+
   const grouped: Grouped = useMemo(() => {
-    // Build: mission -> (slotKey -> items)
     const byMission = new Map<string, Map<string, { startLabel: string; endLabel: string; items: FlatRosterItem[] }>>();
 
+    // group existing rows by mission and time slot
     for (const r of sortedRows) {
       const missionName = r.mission?.name ?? "";
       const sMs = epochMs(r.start_at, (r as any).start_epoch_ms);
       const eMs = epochMs(r.end_at, (r as any).end_epoch_ms);
-
       const key = slotKey(missionName, sMs, eMs);
-
-      // Prefer server-calculated local if provided; otherwise format UTC with APP_TZ
       const startLabel = r.start_local ? formatYMDHM(r.start_local, APP_TZ) : formatYMDHM(r.start_at, APP_TZ);
-      const endLabel   = r.end_local   ? formatYMDHM(r.end_local,   APP_TZ) : formatYMDHM(r.end_at,   APP_TZ);
-
+      const endLabel = r.end_local ? formatYMDHM(r.end_local, APP_TZ) : formatYMDHM(r.end_at, APP_TZ);
 
       if (!byMission.has(missionName)) byMission.set(missionName, new Map());
       const slots = byMission.get(missionName)!;
-
       if (!slots.has(key)) {
         slots.set(key, { startLabel, endLabel, items: [] });
       }
       slots.get(key)!.items.push(r);
     }
 
-    // Convert to array form (preserve sorted order implicitly by iterating sortedRows)
-    const result: Grouped = [];
-    const missionOrder: string[] = [];
-    const seenMission = new Set<string>();
+    // ensure all missions and their slots appear
+    for (const m of allMissions) {
+      const missionName = m.name ?? "";
+      if (!byMission.has(missionName)) byMission.set(missionName, new Map());
+      const slots = byMission.get(missionName)!;
+      const ms = slotsByMission.get(m.id) || [];
 
-    for (const r of sortedRows) {
-      const m = r.mission?.name ?? "";
-      if (!seenMission.has(m)) {
-        missionOrder.push(m);
-        seenMission.add(m);
+      for (const s of ms) {
+        const startDay = day;
+        const endDay = isOvernight(s.start_time, s.end_time) ? nextDayISO(day) : day;
+        const startLabel = labelFor(startDay, s.start_time);
+        const endLabel = labelFor(endDay, s.end_time);
+
+        // NEW: if a slot with same labels already exists (from real assignments),
+        // do NOT add a seeded duplicate.
+        const alreadyExists = Array.from(slots.values()).some(
+          v => v.startLabel === startLabel && v.endLabel === endLabel
+        );
+        if (alreadyExists) continue;
+
+        const key = `seed__${missionName}__${startLabel}__${endLabel}`;
+        if (!slots.has(key)) {
+          slots.set(key, { startLabel, endLabel, items: [] });
+        }
       }
     }
 
+    // collect missions alphabetically
+    const missionOrder = Array.from(
+      new Set([
+        ...sortedRows.map(r => r.mission?.name ?? ""),
+        ...allMissions.map(m => m.name ?? ""),
+      ])
+    ).sort((a, b) => a.localeCompare(b));
+
+    const result: Grouped = [];
+
     for (const m of missionOrder) {
       const slots = byMission.get(m)!;
-      // Keep slot insertion order (already sortedRows order)
       const slotArr: Grouped[number]["slots"] = [];
       const seenSlots = new Set<string>();
+
       for (const r of sortedRows) {
         const mm = r.mission?.name ?? "";
         if (mm !== m) continue;
@@ -683,15 +728,38 @@ export default function Planner() {
           seenSlots.add(k);
         }
       }
+
+      // also include any seeded (empty) slots not yet added
+      for (const [k, v] of slots) {
+        if (seenSlots.has(k)) continue;
+        slotArr.push({ key: k, startLabel: v.startLabel, endLabel: v.endLabel, items: v.items });
+      }
+
       result.push({ missionName: m, slots: slotArr });
     }
 
     return result;
-  }, [sortedRows]);
+  }, [sortedRows, allMissions, slotsByMission, day]);
 
   useEffect(() => {
     loadAllAssignments();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [day]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const missions = await listMissions();
+        setAllMissions(missions);
+        const entries: Array<[number, MissionSlot[]]> = await Promise.all(
+          missions.map(async (m) => [m.id, await listMissionSlots(m.id)] as [number, MissionSlot[]])
+        );
+        setSlotsByMission(new Map(entries));
+      } catch {
+        setAllMissions([]);
+        setSlotsByMission(new Map());
+      }
+    })();
   }, [day]);
 
   return (
