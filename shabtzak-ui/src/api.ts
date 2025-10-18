@@ -183,3 +183,14 @@ export async function getPlannerWarnings(day: string): Promise<PlannerWarning[]>
   return data;
 }
 
+export type Vacation = {
+  id?: number;
+  soldier_id: number;
+  start_date: string; // YYYY-MM-DD
+  end_date: string;   // YYYY-MM-DD
+};
+
+export async function listSoldierVacations(soldierId: number): Promise<Vacation[]> {
+  const r = await api.get(`/vacations/soldiers/${soldierId}`);
+  return r.data as Vacation[];
+}

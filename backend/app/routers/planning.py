@@ -16,6 +16,8 @@ from app.models.mission_slot import MissionSlot
 from app.models.mission_requirement import MissionRequirement
 from app.models.soldier import Soldier
 from app.models.soldier_mission_restriction import SoldierMissionRestriction
+from app.models.vacation import Vacation
+
 
 import os
 from zoneinfo import ZoneInfo
@@ -48,6 +50,62 @@ def _day_bounds(d: date) -> tuple[datetime, datetime]:
     end_local = start_local + timedelta(days=1)
     return start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc)
 
+def _vacation_blocks_for_day(db: Session, the_day: date) -> Dict[int, List[tuple[datetime, datetime]]]:
+    """
+    Build, in LOCAL_TZ, the 'blocked' time windows for each soldier on `the_day`,
+    then convert to UTC. Rules:
+      - If the_day is strictly between start_date and end_date: block 00:00–24:00.
+      - If the_day == start_date and the_day < end_date: block 14:00–24:00.
+      - If the_day == end_date and the_day > start_date: block 00:00–14:00.
+      - If start_date == end_date == the_day: block the whole day (00:00–24:00).
+    """
+    blocks: Dict[int, List[tuple[datetime, datetime]]] = {}
+
+    # Fetch only vacations that touch this day
+    vacs = db.execute(
+        select(Vacation).where(
+            and_(
+                Vacation.start_date <= the_day,
+                Vacation.end_date >= the_day,
+            )
+        )
+    ).scalars().all()
+
+    day_start_local = datetime(the_day.year, the_day.month, the_day.day, 0, 0, 0, tzinfo=LOCAL_TZ)
+    day_end_local = day_start_local + timedelta(days=1)
+
+    for v in vacs:
+        s_id = v.soldier_id
+        # Determine which pattern applies
+        if v.start_date < the_day < v.end_date:
+            block_start_local = day_start_local
+            block_end_local = day_end_local
+            blocks.setdefault(s_id, []).append(
+                (block_start_local.astimezone(timezone.utc), block_end_local.astimezone(timezone.utc))
+            )
+        elif v.start_date == the_day == v.end_date:
+            # Single-day vacation → treat as fully blocked (00–24)
+            block_start_local = day_start_local
+            block_end_local = day_end_local
+            blocks.setdefault(s_id, []).append(
+                (block_start_local.astimezone(timezone.utc), block_end_local.astimezone(timezone.utc))
+            )
+        elif v.start_date == the_day and v.end_date > the_day:
+            block_start_local = day_start_local.replace(hour=14, minute=0, second=0, microsecond=0)
+            block_end_local = day_end_local
+            blocks.setdefault(s_id, []).append(
+                (block_start_local.astimezone(timezone.utc), block_end_local.astimezone(timezone.utc))
+            )
+        elif v.end_date == the_day and v.start_date < the_day:
+            block_start_local = day_start_local
+            block_end_local = day_start_local.replace(hour=14, minute=0, second=0, microsecond=0)
+            blocks.setdefault(s_id, []).append(
+                (block_start_local.astimezone(timezone.utc), block_end_local.astimezone(timezone.utc))
+            )
+        # All other cases do not create a block on this specific day
+
+    return blocks
+
 def _load_context(db: Session) -> dict:
     missions: List[Mission] = db.execute(
         select(Mission).options(
@@ -77,6 +135,7 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
     the_day = _parse_day(req.day)
     day_start, day_end = _day_bounds(the_day)
     ctx = _load_context(db)
+    vacation_blocks = _vacation_blocks_for_day(db, the_day)
 
     mission_list = ctx["missions"]
     if req.mission_ids:
@@ -154,6 +213,18 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
                         # skip if already assigned in this same slot
                         if candidate.id in assigned_here:
                             continue
+
+                        # skip if candidate is blocked by vacation on this day for the slot window
+                        blocked_list = vacation_blocks.get(candidate.id, [])
+                        if blocked_list:
+                            overlap = False
+                            for bs_utc, be_utc in blocked_list:
+                                # overlap if block_start < slot_end AND block_end > slot_start
+                                if bs_utc < end_at and be_utc > start_at:
+                                    overlap = True
+                                    break
+                            if overlap:
+                                continue
 
                         # skip if candidate is already busy in the same exact window (any mission)
                         exists = db.execute(

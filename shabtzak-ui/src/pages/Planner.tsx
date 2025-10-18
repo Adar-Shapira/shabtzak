@@ -4,6 +4,8 @@ import { api } from "../api";
 import { listSoldiers, reassignAssignment, type Soldier } from "../api";
 import Modal from "../components/Modal";
 import { getPlannerWarnings, type PlannerWarning } from "../api"
+import { listSoldierVacations, type Vacation } from "../api";
+
 
 
 type PlanResultItem = {
@@ -116,12 +118,14 @@ export default function Planner() {
 
   const [isChangeOpen, setIsChangeOpen] = useState(false);
   const [allSoldiers, setAllSoldiers] = useState<Soldier[]>([]);
+  const [visibleCandidates, setVisibleCandidates] = useState<Soldier[]>([]);
   const [pendingAssignmentId, setPendingAssignmentId] = useState<number | null>(null);
   const [changeLoading, setChangeLoading] = useState(false);
   const [changeError, setChangeError] = useState<string | null>(null);
   const [pendingRoleName, setPendingRoleName] = useState<string | null>(null);
 
   const [pendingMissionId, setPendingMissionId] = useState<number | null>(null);
+  const [vacationsCache] = useState<Map<number, Vacation[]>>(new Map());
 
   const [warnings, setWarnings] = useState<PlannerWarning[]>([])
   const [warnLoading, setWarnLoading] = useState(false)
@@ -248,15 +252,30 @@ export default function Planner() {
     try {
       const soldiers = await listSoldiers();
       const byRole = roleName ? soldiers.filter(s => (s.roles || []).some(r => r.name === roleName)) : soldiers;
-
-      // If you want to pre-filter by restrictions on the client side, you can
-      // fetch each soldier’s restrictions, but that is chatty. Prefer server-side enforcement.
       setAllSoldiers(byRole);
+
+      const target = rows.find(r => r.id === assignmentId);
+      if (!target) {
+        setVisibleCandidates(byRole);
+        return;
+      }
+
+      const dayISO = day; // YYYY-MM-DD selected in the planner
+      const slotStartISO = target.start_local || target.start_at;
+      const slotEndISO = target.end_local || target.end_at;
+
+      const allowed: Soldier[] = [];
+      for (const s of byRole) {
+        const ok = await isSoldierAllowedForSlot(s.id, dayISO, slotStartISO, slotEndISO);
+        if (ok) allowed.push(s);
+      }
+      setVisibleCandidates(allowed);
     } catch {
       setChangeError("Failed to load soldiers");
+      setAllSoldiers([]);
+      setVisibleCandidates([]);
     }
   }
-
 
   async function handleReassign(soldierId: number) {
     if (!pendingAssignmentId) return;
@@ -296,6 +315,66 @@ export default function Planner() {
     }
   }
 
+  async function ensureVacations(soldierId: number): Promise<Vacation[]> {
+    if (vacationsCache.has(soldierId)) return vacationsCache.get(soldierId)!;
+    const data = await listSoldierVacations(soldierId);
+    vacationsCache.set(soldierId, data);
+    return data;
+  }
+
+  async function isSoldierAllowedForSlot(
+    soldierId: number,
+    dayISO: string,
+    slotStartISO: string,
+    slotEndISO: string
+  ): Promise<boolean> {
+    const vacs = await ensureVacations(soldierId);
+    const blocks = buildVacationBlocksForDayLocal(vacs, dayISO);
+    if (blocks.length === 0) return true;
+
+    const slotStartLocal = new Date(slotStartISO);
+    const slotEndLocal = new Date(slotEndISO);
+    for (const [bs, be] of blocks) {
+      if (overlapsLocal(slotStartLocal, slotEndLocal, bs, be)) return false;
+    }
+    return true;
+  }
+
+  function buildVacationBlocksForDayLocal(vacs: Vacation[], dayISO: string): Array<[Date, Date]> {
+    const blocks: Array<[Date, Date]> = [];
+    const dayStart = new Date(`${dayISO}T00:00:00`);
+    const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
+
+    for (const v of vacs) {
+      const sd = v.start_date;
+      const ed = v.end_date;
+
+      const startLt = new Date(`${sd}T00:00:00`);
+      const endLtEndOfDay = new Date(new Date(`${ed}T00:00:00`).getTime() + 24 * 60 * 60 * 1000);
+
+      const isMiddleDay = startLt < dayStart && new Date(`${ed}T00:00:00`) > dayStart;
+      const isStartDay = sd === dayISO && ed !== dayISO;
+      const isEndDay = ed === dayISO && sd !== dayISO;
+      const isSingleDay = sd === dayISO && ed === dayISO;
+
+      if (isMiddleDay || isSingleDay) {
+        blocks.push([dayStart, dayEnd]);
+      } else if (isStartDay) {
+        const start14 = new Date(dayStart);
+        start14.setHours(14, 0, 0, 0);
+        blocks.push([start14, dayEnd]);
+      } else if (isEndDay) {
+        const end14 = new Date(dayStart);
+        end14.setHours(14, 0, 0, 0);
+        blocks.push([dayStart, end14]);
+      }
+    }
+    return blocks;
+  }
+
+  function overlapsLocal(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date): boolean {
+    return bStart < aEnd && bEnd > aStart;
+  }
 
   const sortedRows = useMemo(() => {
     return [...rows].sort((a, b) => {
@@ -484,8 +563,8 @@ export default function Planner() {
               {changeLoading && <div>Applying change…</div>}
               {!changeLoading && (
                 <div style={{ maxHeight: 360, overflowY: "auto" }}>
-                  {allSoldiers.length === 0 && <div>No soldiers found</div>}
-                  {allSoldiers.map((s) => (
+                  {visibleCandidates.length === 0 && <div>No soldiers found</div>}
+                  {visibleCandidates.map((s) => (
                   <div
                     key={s.id}
                     style={{
