@@ -161,3 +161,19 @@ export async function getSoldierMissionHistory(soldierId: number): Promise<Missi
   const res = await api.get(`/soldiers/${soldierId}/mission-history`)
   return res.data as MissionHistoryItem[]
 }
+
+export type PlannerWarning = {
+  type: "RESTRICTED" | "OVERLAP" | "REST"
+  soldier_id: number
+  soldier_name: string
+  mission_id: number
+  mission_name: string
+  start_at: string
+  end_at: string
+  details?: string | null
+}
+
+export async function getPlannerWarnings(params?: { from_ts?: string; to_ts?: string }): Promise<PlannerWarning[]> {
+  const res = await api.get("/plan/warnings", { params })
+  return res.data as PlannerWarning[]
+}

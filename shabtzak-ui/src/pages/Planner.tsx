@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { listSoldiers, reassignAssignment, type Soldier } from "../api";
 import Modal from "../components/Modal";
+import { getPlannerWarnings, type PlannerWarning } from "../api"
 
 
 type PlanResultItem = {
@@ -117,6 +118,27 @@ export default function Planner() {
   const [pendingRoleName, setPendingRoleName] = useState<string | null>(null);
 
   const [pendingMissionId, setPendingMissionId] = useState<number | null>(null);
+
+  const [warnings, setWarnings] = useState<PlannerWarning[]>([])
+  const [warnLoading, setWarnLoading] = useState(false)
+  const [warnError, setWarnError] = useState<string | null>(null)
+
+  async function loadWarnings() {
+    try {
+      setWarnLoading(true)
+      setWarnError(null)
+      const items = await getPlannerWarnings()
+      setWarnings(items)
+    } catch (e: any) {
+      setWarnError(e?.message || "Failed to load warnings")
+    } finally {
+      setWarnLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    loadWarnings()
+  }, [])
 
 
   async function runPlanner() {
@@ -332,6 +354,43 @@ export default function Planner() {
           </div>
         </div>
       )}
+
+      <section style={{ marginTop: 16, marginBottom: 16 }}>
+        <h2 style={{ marginBottom: 8 }}>Warnings</h2>
+        {warnLoading && <div>Loading…</div>}
+        {!warnLoading && warnError && <div style={{ color: "crimson" }}>{warnError}</div>}
+        {!warnLoading && !warnError && warnings.length === 0 && (
+          <div style={{ opacity: 0.7 }}>(No warnings)</div>
+        )}
+        {!warnLoading && !warnError && warnings.length > 0 && (
+          <div className="overflow-x-auto">
+            <table className="min-w-full border-collapse" style={{ width: "100%" }}>
+              <thead>
+                <tr>
+                  <th className="border p-2 text-left">Type</th>
+                  <th className="border p-2 text-left">Soldier</th>
+                  <th className="border p-2 text-left">Mission</th>
+                  <th className="border p-2 text-left">Start</th>
+                  <th className="border p-2 text-left">End</th>
+                  <th className="border p-2 text-left">Details</th>
+                </tr>
+              </thead>
+              <tbody>
+                {warnings.map((w, i) => (
+                  <tr key={i}>
+                    <td className="border p-2">{w.type}</td>
+                    <td className="border p-2">{w.soldier_name} (#{w.soldier_id})</td>
+                    <td className="border p-2">{w.mission_name} (#{w.mission_id})</td>
+                    <td className="border p-2">{w.start_at}</td>
+                    <td className="border p-2">{w.end_at}</td>
+                    <td className="border p-2">{w.details || ""}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
 
       <div className="space-y-2">
         <h2 className="font-medium">Assignments</h2>

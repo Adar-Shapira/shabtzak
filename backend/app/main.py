@@ -17,6 +17,8 @@ from app.routers.planning import router as planning_router
 from app.routers.mission_requirements import router as mission_requirements_router
 from app.routers.vacations import router as vacations_router
 from app.routers import mission_history
+from app.routers import warnings as warnings_router
+
 
 
 def build_app() -> FastAPI:
@@ -48,7 +50,7 @@ def build_app() -> FastAPI:
     app.include_router(mission_requirements_router)
     app.include_router(vacations_router)
     app.include_router(mission_history.router)
-
+    app.include_router(warnings_router.router)
 
     return app
 
