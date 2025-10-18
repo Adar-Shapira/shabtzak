@@ -15,6 +15,8 @@ from app.models.mission import Mission
 from app.models.mission_slot import MissionSlot
 from app.models.role import Role
 from app.models.soldier import Soldier
+from app.models.soldier_mission_restriction import SoldierMissionRestriction
+
 
 from zoneinfo import ZoneInfo
 import os
@@ -261,6 +263,16 @@ def reassign_assignment(body: ReassignRequest, db: Session = Depends(get_db)):
     s = db.get(Soldier, body.soldier_id)
     if not s:
         raise HTTPException(status_code=404, detail="Soldier not found")
+    
+        # Restriction: soldier cannot be assigned to this assignment's mission
+    if a.mission_id:
+        restricted = db.query(SoldierMissionRestriction).filter(
+            SoldierMissionRestriction.soldier_id == s.id,
+            SoldierMissionRestriction.mission_id == a.mission_id,
+        ).first()
+        if restricted:
+            raise HTTPException(status_code=400, detail="Soldier is restricted from this mission")
+
 
     # Optional place to validate conflicts, department/role, vacations, etc.
 

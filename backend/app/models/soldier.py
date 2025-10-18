@@ -25,3 +25,10 @@ class Soldier(Base):
     @property
     def role_names(self) -> list[str]:
         return sorted({r.name for r in (self.roles or [])})
+    
+    mission_restrictions = relationship(
+        "SoldierMissionRestriction",
+        back_populates="soldier",
+        cascade="all, delete-orphan"
+    )
+

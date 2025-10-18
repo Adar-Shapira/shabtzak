@@ -99,45 +99,6 @@ function slotKey(missionName: string, startMs: number, endMs: number) {
   return `${missionName}__${startMs}__${endMs}`;
 }
 
-function fmt(dtIso: string) {
-  try {
-    const d = new Date(dtIso); // ISO from backend (UTC)
-    return new Intl.DateTimeFormat(undefined, {
-      timeZone: APP_TZ,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-    }).format(d);
-  } catch {
-    return dtIso;
-  }
-}
-
-function fmtLocal(localIso: string | undefined, utcIso: string) {
-  // Prefer server-made local string (already correct & stable)
-  if (localIso) return localIso.replace("T", " ");
-  // Fallback: format UTC ISO using configured TZ (edge deployments)
-  try {
-    const d = new Date(utcIso);
-    return new Intl.DateTimeFormat(undefined, {
-      timeZone: APP_TZ,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hour12: false,
-    }).format(d);
-  } catch {
-    return utcIso;
-  }
-}
-
-
 export default function Planner() {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const [day, setDay] = useState<string>(today);
@@ -154,6 +115,8 @@ export default function Planner() {
   const [changeLoading, setChangeLoading] = useState(false);
   const [changeError, setChangeError] = useState<string | null>(null);
   const [pendingRoleName, setPendingRoleName] = useState<string | null>(null);
+
+  const [pendingMissionId, setPendingMissionId] = useState<number | null>(null);
 
 
   async function runPlanner() {
@@ -185,22 +148,25 @@ export default function Planner() {
     }
   }
 
-  async function openChangeModal(assignmentId: number, roleName: string | null) {
+  async function openChangeModal(assignmentId: number, roleName: string | null, missionId: number | null) {
     setPendingAssignmentId(assignmentId);
     setPendingRoleName(roleName);
+    setPendingMissionId(missionId);
     setChangeError(null);
     setIsChangeOpen(true);
 
     try {
       const soldiers = await listSoldiers();
-      const filtered = roleName
-        ? soldiers.filter(s => (s.roles || []).some(r => r.name === roleName))
-        : soldiers;
-      setAllSoldiers(filtered);
-    } catch (e) {
+      const byRole = roleName ? soldiers.filter(s => (s.roles || []).some(r => r.name === roleName)) : soldiers;
+
+      // If you want to pre-filter by restrictions on the client side, you can
+      // fetch each soldier’s restrictions, but that is chatty. Prefer server-side enforcement.
+      setAllSoldiers(byRole);
+    } catch {
       setChangeError("Failed to load soldiers");
     }
   }
+
 
   async function handleReassign(soldierId: number) {
     if (!pendingAssignmentId) return;
@@ -441,7 +407,7 @@ export default function Planner() {
                             <span>{r.soldier_name || "Unassigned"}</span>
                             <button
                               type="button"
-                              onClick={() => openChangeModal(r.id, r.role)}
+                              onClick={() => openChangeModal(r.id, r.role, r.mission?.id || null)}
                               style={{ padding: "2px 8px" }}
                             >
                               Change

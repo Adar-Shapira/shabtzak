@@ -138,3 +138,12 @@ export async function reassignAssignment(payload: ReassignPayload) {
   return data;
 }
 
+export async function getSoldierMissionRestrictions(soldierId: number): Promise<{ soldier_id: number; mission_ids: number[] }> {
+  const { data } = await api.get(`/soldiers/${soldierId}/mission_restrictions`);
+  return data;
+}
+
+export async function putSoldierMissionRestrictions(soldierId: number, missionIds: number[]): Promise<{ soldier_id: number; mission_ids: number[] }> {
+  const { data } = await api.put(`/soldiers/${soldierId}/mission_restrictions`, { mission_ids: missionIds });
+  return data;
+}

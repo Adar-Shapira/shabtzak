@@ -4,6 +4,8 @@ import type React from "react";
 import { api } from "../api";
 import Modal from "../components/Modal";
 import { useDisclosure } from "../hooks/useDisclosure";
+import { listMissions, getSoldierMissionRestrictions, putSoldierMissionRestrictions, type Mission } from "../api";
+
 
 type Role = { 
     id: number; 
@@ -11,11 +13,6 @@ type Role = {
  };
 
 type Department = { 
-    id: number; 
-    name: string 
-};
-
-type Mission = { 
     id: number; 
     name: string 
 };
@@ -78,6 +75,36 @@ export default function SoldiersPage() {
     const deptDlg = useDisclosure(false);           // controls the add/edit department modal
     const [deptEditId, setDeptEditId] = useState<number | null>(null);
     const [deptName, setDeptName] = useState("");  // input for add/rename
+
+    const [allMissions, setAllMissions] = useState<Mission[]>([]);
+    const [savingRestr, setSavingRestr] = useState<number | null>(null); // soldier id being saved
+    const [restrCache, setRestrCache] = useState<Record<number, number[]>>({}); // soldier_id -> mission_ids
+
+    const restrDlg = useDisclosure(false);
+    const [restrSoldier, setRestrSoldier] = useState<Soldier | null>(null);
+
+    const openRestrictions = async (s: Soldier) => {
+    setErr(null);
+    setRestrSoldier(s);
+    if (!restrCache[s.id]) {
+        try {
+        const res = await getSoldierMissionRestrictions(s.id);
+        setRestrCache(prev => ({ ...prev, [s.id]: res.mission_ids }));
+        } catch {
+        setRestrCache(prev => ({ ...prev, [s.id]: [] }));
+        }
+    }
+    restrDlg.open();
+    };
+
+    const closeRestrictions = () => {
+    setRestrSoldier(null);
+    restrDlg.close();
+    };
+
+    useEffect(() => {
+    listMissions().then(setAllMissions).catch(() => setAllMissions([]));
+    }, []);
 
     const startAddDept = () => {
     setDeptEditId(null);
@@ -187,7 +214,6 @@ export default function SoldiersPage() {
     const vacDlg = useDisclosure(false);
     const [vacSoldier, setVacSoldier] = useState<Soldier | null>(null);
     const [vacations, setVacations] = useState<Vacation[]>([]);
-    const [vacLoading, setVacLoading] = useState(false);
 
     // vacation form state
     const [vacEditId, setVacEditId] = useState<number | null>(null);
@@ -302,8 +328,6 @@ export default function SoldiersPage() {
     };
 
     const fetchVacations = async (soldierId: number) => {
-        setVacLoading(true);
-
         // helper to normalize IDs to numbers (handles string/number mismatches)
         const sameId = (x: any, y: any) => Number(x) === Number(y);
 
@@ -344,7 +368,6 @@ export default function SoldiersPage() {
         } catch (e: any) {
             setErr(e?.response?.data?.detail ?? "Failed to load vacations");
         } finally {
-            setVacLoading(false);
         }
     };
 
@@ -724,6 +747,62 @@ export default function SoldiersPage() {
                         )}
                         </div>
                     </form>
+
+                    <Modal
+                    open={restrDlg.isOpen}
+                    onClose={closeRestrictions}
+                    title={restrSoldier ? `Mission Restrictions — ${restrSoldier.name}` : "Mission Restrictions"}
+                    maxWidth={720}
+                    >
+                    {!restrSoldier ? (
+                        <div style={{ opacity: 0.7 }}>No soldier selected.</div>
+                    ) : (
+                        <div style={{ display: "grid", gap: 12 }}>
+                        <div style={{ fontSize: 12, opacity: 0.75 }}>
+                            Soldier will not be assigned to the selected missions.
+                        </div>
+
+                        <div className="flex flex-wrap gap-2">
+                            {allMissions.map((m) => {
+                            const selected = (restrCache[restrSoldier.id] || []).includes(m.id);
+                            return (
+                                <label key={m.id} className="inline-flex items-center gap-1 border rounded px-2 py-1">
+                                <input
+                                    type="checkbox"
+                                    checked={selected}
+                                    onChange={(e) => {
+                                    const next = new Set(restrCache[restrSoldier.id] || []);
+                                    if (e.target.checked) next.add(m.id); else next.delete(m.id);
+                                    setRestrCache(prev => ({ ...prev, [restrSoldier.id]: Array.from(next) }));
+                                    }}
+                                />
+                                <span>{m.name}</span>
+                                </label>
+                            );
+                            })}
+                        </div>
+
+                        <div style={{ display: "flex", justifyContent: "end", gap: 8 }}>
+                            <button onClick={closeRestrictions}>Close</button>
+                            <button
+                            onClick={async () => {
+                                try {
+                                if (!restrSoldier) return;
+                                setSavingRestr(restrSoldier.id);
+                                await putSoldierMissionRestrictions(restrSoldier.id, restrCache[restrSoldier.id] || []);
+                                } finally {
+                                setSavingRestr(null);
+                                }
+                            }}
+                            className="border rounded px-3 py-1 text-sm hover:bg-gray-50 disabled:opacity-50"
+                            disabled={!!(restrSoldier && savingRestr === restrSoldier.id)}
+                            >
+                            {restrSoldier && savingRestr === restrSoldier.id ? "Saving…" : "Save"}
+                            </button>
+                        </div>
+                        </div>
+                    )}
+                    </Modal>
 
                     {/* Vacations list */}
                     <table width="100%" cellPadding={8} style={{ borderCollapse: "collapse" }}>

@@ -15,6 +15,7 @@ from app.models.mission import Mission
 from app.models.mission_slot import MissionSlot
 from app.models.mission_requirement import MissionRequirement
 from app.models.soldier import Soldier
+from app.models.soldier_mission_restriction import SoldierMissionRestriction
 
 import os
 from zoneinfo import ZoneInfo

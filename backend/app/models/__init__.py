@@ -12,6 +12,8 @@ from .assignment import Assignment
 from .vacation import Vacation
 from .department import Department
 from .mission_requirement import MissionRequirement
+from .soldier_mission_restriction import SoldierMissionRestriction
+
 
 __all__ = [
     "Base",
