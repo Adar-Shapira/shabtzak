@@ -106,6 +106,184 @@ def _vacation_blocks_for_day(db: Session, the_day: date) -> Dict[int, List[tuple
 
     return blocks
 
+def _overlaps(a_start: datetime, a_end: datetime, b_start: datetime, b_end: datetime) -> bool:
+    return (a_start < b_end) and (a_end > b_start)
+
+def _has_8h_rest_around(
+    occupied: List[tuple[datetime, datetime]],
+    cand_start: datetime,
+    cand_end: datetime,
+    min_gap: timedelta,
+) -> bool:
+    """
+    Return True if BOTH gaps are satisfied:
+      - previous_end -> cand_start >= min_gap
+      - cand_end -> next_start >= min_gap
+    Only checks the nearest neighbors among `occupied`. Does NOT consider overlaps
+    (you already block overlaps separately).
+    """
+    if not occupied:
+        return True
+
+    prev_end = None
+    next_start = None
+
+    for s, e in occupied:
+        if e <= cand_start and (prev_end is None or e > prev_end):
+            prev_end = e
+        if s >= cand_end and (next_start is None or s < next_start):
+            next_start = s
+
+    ok_prev = True if prev_end is None else (cand_start - prev_end) >= min_gap
+    ok_next = True if next_start is None else (next_start - cand_end) >= min_gap
+    return ok_prev and ok_next
+
+
+# -------- Fairness/Rotation configuration --------
+FAIRNESS_WINDOW_DAYS = 14  # look back this many days for rotation/workload stats
+EIGHT_HOURS = timedelta(hours=8)
+
+# We minimize this score (lower = more preferred).
+# Tweak weights to taste; all are >= 0.
+WEIGHTS = {
+    "recent_gap_penalty_per_hour_missing": 2.0,    # penalty per hour when rest gap < 8h
+    "same_mission_recent_penalty": 5.0,            # flat penalty if soldier did this mission in the lookback window
+    "mission_repeat_count_penalty": 1.0,           # per-count penalty for how many times soldier did this mission in window
+    "today_assignment_count_penalty": 2.0,         # per assignment already today
+    "total_hours_window_penalty_per_hour": 0.05,   # mild penalty per worked hour in lookback window
+    "recent_gap_boost_per_hour": -0.1,             # small negative penalty (boost) per hour of rest beyond 8h
+}
+
+class SoldierStats:
+    __slots__ = (
+        "last_end_at",             # datetime | None
+        "today_count",             # int
+        "total_hours_window",      # float hours
+        "mission_count",           # Dict[int, int]
+        "recent_missions",         # set[int]
+    )
+    def __init__(self):
+        self.last_end_at = None
+        self.today_count = 0
+        self.total_hours_window = 0.0
+        self.mission_count = {}
+        self.recent_missions = set()
+
+def _fetch_recent_assignments(db: Session, day_start: datetime, day_end: datetime) -> List[Assignment]:
+    window_start = day_start - timedelta(days=FAIRNESS_WINDOW_DAYS)
+    # Bring assignments from [window_start, day_end) to compute stats
+    return db.execute(
+        select(Assignment)
+        .where(Assignment.end_at > window_start)
+        .where(Assignment.start_at < day_end)
+    ).scalars().all()
+
+def _build_soldier_stats(recent: List[Assignment], day_start: datetime, day_end: datetime) -> Dict[int, SoldierStats]:
+    stats: Dict[int, SoldierStats] = {}
+    for a in recent:
+        s_id = a.soldier_id
+        st = stats.setdefault(s_id, SoldierStats())
+
+        # last_end_at: keep the latest assignment end strictly before day_start
+        if a.end_at <= day_start:
+            if st.last_end_at is None or a.end_at > st.last_end_at:
+                st.last_end_at = a.end_at
+
+        # today_count: count assignments that overlap the selected day
+        if not (a.end_at <= day_start or a.start_at >= day_end):
+            # overlaps the day window → counts as "today"
+            st.today_count += 1
+
+        # total hours in lookback window
+        # intersect assignment with [day_start - window, day_end] for fair hours rounding
+        window_start = day_start - timedelta(days=FAIRNESS_WINDOW_DAYS)
+        seg_start = max(a.start_at, window_start)
+        seg_end = min(a.end_at, day_end)
+        if seg_end > seg_start:
+            st.total_hours_window += (seg_end - seg_start).total_seconds() / 3600.0
+
+        # mission rotation stats in lookback window
+        if a.start_at < day_end and a.end_at > (day_start - timedelta(days=FAIRNESS_WINDOW_DAYS)):
+            st.mission_count[a.mission_id] = st.mission_count.get(a.mission_id, 0) + 1
+            st.recent_missions.add(a.mission_id)
+
+    return stats
+
+def _score_candidate(
+    soldier: Soldier,
+    mission_id: int,
+    start_at: datetime,
+    end_at: datetime,
+    st: SoldierStats,
+) -> float:
+    score = 0.0
+
+    # 1) Rest maximization: prefer larger gap; penalize gaps under 8h
+    # If no last_end_at, treat as well-rested (small boost from duration itself).
+    if st.last_end_at is not None:
+        gap = start_at - st.last_end_at
+        if gap < timedelta(0):
+            # Overlap with candidate's last assignment (should be filtered elsewhere),
+            # but if reached here, punish heavily.
+            missing_hours = abs(gap.total_seconds()) / 3600.0
+            score += WEIGHTS["recent_gap_penalty_per_hour_missing"] * (8.0 + missing_hours)
+        elif gap < EIGHT_HOURS:
+            missing = (EIGHT_HOURS - gap).total_seconds() / 3600.0
+            score += WEIGHTS["recent_gap_penalty_per_hour_missing"] * missing
+        else:
+            extra = (gap - EIGHT_HOURS).total_seconds() / 3600.0
+            score += WEIGHTS["recent_gap_boost_per_hour"] * extra
+    else:
+        # No recent work → tiny preference (negative penalty)
+        score += WEIGHTS["recent_gap_boost_per_hour"] * 4.0
+
+    # 2) Rotation: avoid repeating same mission
+    if mission_id in st.recent_missions:
+        score += WEIGHTS["same_mission_recent_penalty"]
+        count = st.mission_count.get(mission_id, 0)
+        score += WEIGHTS["mission_repeat_count_penalty"] * float(count)
+
+    # 3) Balance intra-day load
+    score += WEIGHTS["today_assignment_count_penalty"] * float(st.today_count)
+
+    # 4) Balance recent workload
+    score += WEIGHTS["total_hours_window_penalty_per_hour"] * float(st.total_hours_window)
+
+    # 5) Prefer longer rest before long shifts a bit more (optional small nudge)
+    duration_hours = (end_at - start_at).total_seconds() / 3600.0
+    score += 0.0 * duration_hours
+
+    return score
+
+def _update_stats_after_assignment(st: SoldierStats, mission_id: int, start_at: datetime, end_at: datetime, day_start: datetime, day_end: datetime):
+    # Update soldier stats in-memory after we place an assignment, so next picks are fair
+    if end_at <= day_start:
+        if st.last_end_at is None or end_at > st.last_end_at:
+            st.last_end_at = end_at
+    elif start_at < day_start and end_at > day_start:
+        # crossing into day → last_end_at remains the latest before day_start
+        pass
+    else:
+        # assignment inside or after day_start
+        if st.last_end_at is None or end_at > st.last_end_at:
+            st.last_end_at = end_at
+
+    # Today count increments if overlaps today
+    if not (end_at <= day_start or start_at >= day_end):
+        st.today_count += 1
+
+    # Hours window (bounded)
+    window_start = day_start - timedelta(days=FAIRNESS_WINDOW_DAYS)
+    seg_start = max(start_at, window_start)
+    seg_end = min(end_at, day_end)
+    if seg_end > seg_start:
+        st.total_hours_window += (seg_end - seg_start).total_seconds() / 3600.0
+
+    # Mission rotation
+    st.recent_missions.add(mission_id)
+    st.mission_count[mission_id] = st.mission_count.get(mission_id, 0) + 1
+
+
 def _load_context(db: Session) -> dict:
     missions: List[Mission] = db.execute(
         select(Mission).options(
@@ -136,6 +314,33 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
     day_start, day_end = _day_bounds(the_day)
     ctx = _load_context(db)
     vacation_blocks = _vacation_blocks_for_day(db, the_day)
+    recent_assignments = _fetch_recent_assignments(db, day_start, day_end)
+    stats_by_soldier = _build_soldier_stats(recent_assignments, day_start, day_end)
+
+    # Exact-window duplicates that already exist today
+    existing_same_window: set[tuple[int, datetime, datetime]] = set(
+        db.execute(
+            select(Assignment.soldier_id, Assignment.start_at, Assignment.end_at)
+            .where(Assignment.start_at < day_end)
+            .where(Assignment.end_at > day_start)
+        ).all()
+    )
+
+    # Per-soldier occupied intervals that touch the day (for general overlap checks)
+    occupied_by_soldier: Dict[int, List[tuple[datetime, datetime]]] = {}
+    for sid, s_at, e_at in db.execute(
+        select(Assignment.soldier_id, Assignment.start_at, Assignment.end_at)
+        .where(Assignment.start_at < day_end)
+        .where(Assignment.end_at > day_start)
+    ).all():
+        occupied_by_soldier.setdefault(sid, []).append((s_at, e_at))
+
+    # (Optional but recommended) Restrictions lookup
+    restricted_pairs: set[tuple[int, int]] = set(
+        db.execute(
+            select(SoldierMissionRestriction.soldier_id, SoldierMissionRestriction.mission_id)
+        ).all()
+    )
 
     mission_list = ctx["missions"]
     if req.mission_ids:
@@ -145,21 +350,39 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
     results: List[PlanResultItem] = []
     rr_index: Dict[Optional[int], int] = {}  # role_id or None
 
+    # One-shot clear (so in-memory lookups reflect the actual DB state)
+    if req.replace:
+        ids_to_clear = [mm.id for mm in mission_list]
+        if ids_to_clear:
+            db.execute(
+                delete(Assignment).where(
+                    and_(
+                        Assignment.mission_id.in_(ids_to_clear),
+                        Assignment.start_at >= day_start,
+                        Assignment.start_at < day_end,
+                    )
+                )
+            )
+            # Rebuild lookups from DB after delete
+            existing_same_window = set(
+                db.execute(
+                    select(Assignment.soldier_id, Assignment.start_at, Assignment.end_at)
+                    .where(Assignment.start_at < day_end)
+                    .where(Assignment.end_at > day_start)
+                ).all()
+            )
+            occupied_by_soldier.clear()
+            for sid, s_at, e_at in db.execute(
+                select(Assignment.soldier_id, Assignment.start_at, Assignment.end_at)
+                .where(Assignment.start_at < day_end)
+                .where(Assignment.end_at > day_start)
+            ).all():
+                occupied_by_soldier.setdefault(sid, []).append((s_at, e_at))                                                                                                                            
+
     for m in mission_list:
         try:
             slots: List[MissionSlot] = sorted(m.slots, key=lambda s: (s.start_time, s.end_time))
             reqs: List[MissionRequirement] = m.requirements
-
-            if req.replace:
-                db.execute(
-                    delete(Assignment).where(
-                        and_(
-                            Assignment.mission_id == m.id,
-                            Assignment.start_at >= day_start,
-                            Assignment.start_at < day_end,
-                        )
-                    )
-                )
 
             if not slots or not reqs:
                 results.append(
@@ -204,48 +427,60 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
                     # round-robin starting point for this role (or None)
                     start_idx = rr_index.get(role_id, 0)
 
-                    picked = None
-                    # try up to len(pool) candidates to avoid infinite loops
-                    for step in range(len(pool)):
-                        idx = (start_idx + step) % len(pool)
-                        candidate = pool[idx]
-
-                        # skip if already assigned in this same slot
-                        if candidate.id in assigned_here:
+                    # Build scored candidate list for this specific slot
+                    # We minimize score; tie-break by prior round-robin cursor.
+                    scored: List[tuple[float, int, Soldier]] = []
+                    for i, cand in enumerate(pool):
+                        if cand.id in assigned_here:
                             continue
 
-                        # skip if candidate is blocked by vacation on this day for the slot window
-                        blocked_list = vacation_blocks.get(candidate.id, [])
-                        if blocked_list:
-                            overlap = False
-                            for bs_utc, be_utc in blocked_list:
-                                # overlap if block_start < slot_end AND block_end > slot_start
-                                if bs_utc < end_at and be_utc > start_at:
-                                    overlap = True
-                                    break
-                            if overlap:
+                        # vacation block check (precomputed)
+                        blocked_list = vacation_blocks.get(cand.id, [])
+                        is_blocked = any(bs_utc < end_at and be_utc > start_at for bs_utc, be_utc in blocked_list)
+                        if is_blocked:
+                            continue
+
+                        # mission restriction
+                        if (cand.id, m.id) in restricted_pairs:
+                            continue
+
+                        # identical window conflict
+                        if (cand.id, start_at, end_at) in existing_same_window:
+                            continue
+
+                        # general overlap against any of this soldier's occupied intervals
+                        if any(_overlaps(start_at, end_at, occ_s, occ_e) for (occ_s, occ_e) in occupied_by_soldier.get(cand.id, [])):
+                            continue
+
+                        # hard 8h rest floor (avoid REST warnings)
+                        st = stats_by_soldier.setdefault(cand.id, SoldierStats())
+                        if st.last_end_at is not None:
+                            if (start_at - st.last_end_at) < EIGHT_HOURS:
                                 continue
 
-                        # skip if candidate is already busy in the same exact window (any mission)
-                        exists = db.execute(
-                            select(Assignment)
-                            .where(Assignment.soldier_id == candidate.id)
-                            .where(Assignment.start_at == start_at)
-                            .where(Assignment.end_at == end_at)
-                        ).scalars().first()
-                        if exists:
+                        # also require 8h before and after relative to already-occupied intervals
+                        occ_list = occupied_by_soldier.get(cand.id, [])
+                        if not _has_8h_rest_around(occ_list, start_at, end_at, EIGHT_HOURS):
                             continue
 
-                        picked = (candidate, idx)
-                        break
 
-                    # if no one fit, move on
-                    if not picked:
+                        # score and tie-break with round-robin cursor
+                        base_score = _score_candidate(cand, m.id, start_at, end_at, st)
+                        start_idx = rr_index.get(role_id, 0)
+                        rr_distance = (i - start_idx) % max(1, len(pool))
+                        score = base_score + rr_distance * 0.001
+
+                        scored.append((score, i, cand))
+
+                    # choose the lowest-score candidate
+                    if not scored:
                         continue
+                    scored.sort(key=lambda t: (t[0], t[1]))
+                    chosen_score, chosen_i, soldier = scored[0]
 
-                    soldier, used_idx = picked
-                    # advance RR cursor to the next after the one we used
-                    rr_index[role_id] = (used_idx + 1) % len(pool)
+                    # advance RR cursor to next after chosen_i for this role
+                    rr_index[role_id] = (chosen_i + 1) % max(1, len(pool))
+
 
                     # remember this soldier is used for this slot, so we won't pick them again
                     assigned_here.add(soldier.id)
@@ -259,6 +494,14 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
                     )
                     db.add(a)
                     created_here += 1
+
+                    existing_same_window.add((soldier.id, start_at, end_at))
+                    occupied_by_soldier.setdefault(soldier.id, []).append((start_at, end_at))
+
+                    # update in-memory stats so later picks remain fair
+                    st = stats_by_soldier.setdefault(soldier.id, SoldierStats())
+                    _update_stats_after_assignment(st, m.id, start_at, end_at, day_start, day_end)
+
 
             results.append(
                 PlanResultItem(mission={"id": m.id, "name": m.name}, created_count=created_here, error=None)
