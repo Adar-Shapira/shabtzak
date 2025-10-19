@@ -1,6 +1,6 @@
 # backend/app/routers/warnings.py
 import os
-from datetime import datetime, time, timedelta, timezone
+from datetime import datetime, date, time, timedelta, timezone
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -10,9 +10,12 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.schemas.warnings import WarningItem
 
+from zoneinfo import ZoneInfo
+
 router = APIRouter(prefix="/plan", tags=["planner"])
 
 APP_TZ = os.getenv("APP_TZ", "UTC")
+_TZ = ZoneInfo(APP_TZ)
 
 SQL = """
 WITH ordered_cte AS (
@@ -40,6 +43,8 @@ overlap_cte AS (
   FROM base o
   WHERE o.prev_end_at IS NOT NULL
     AND o.start_at < o.prev_end_at
+    -- only warn for assignments that START on the selected day in APP_TZ
+    AND ((o.start_at AT TIME ZONE 'UTC' AT TIME ZONE :tz)::date = :day_date)
 ),
 rest_cte AS (
   SELECT
@@ -49,6 +54,8 @@ rest_cte AS (
   WHERE o.prev_end_at IS NOT NULL
     AND (o.start_at - o.prev_end_at) >= interval '0 hours'
     AND (o.start_at - o.prev_end_at) < interval '8 hours'
+    -- only warn for assignments that START on the selected day in APP_TZ
+    AND ((o.start_at AT TIME ZONE 'UTC' AT TIME ZONE :tz)::date = :day_date)
 ),
 restricted_cte AS (
   SELECT
@@ -57,6 +64,8 @@ restricted_cte AS (
   JOIN soldier_mission_restrictions r
     ON r.soldier_id = b.soldier_id
    AND r.mission_id = b.mission_id
+  -- only warn for assignments that START on the selected day in APP_TZ
+  WHERE ((b.start_at AT TIME ZONE 'UTC' AT TIME ZONE :tz)::date = :day_date)
 )
 SELECT
   'RESTRICTED' AS type,
@@ -112,22 +121,12 @@ def _local_midnight_bounds(day_str: str, tz_name: str) -> tuple[datetime, dateti
   We avoid OS tz DB complications by using SQL for display; here we only need UTC bounds.
   """
   try:
-    # Treat given day in app tz as naive date; convert to UTC by assuming day’s local midnight = 00:00 in app tz
-    # Since we don’t have pytz/zoneinfo here by default, use a simple approach:
-    # Expect the DB timestamps are UTC; frontend day is for APP_TZ.
-    # We’ll compute UTC bounds in SQL using APP_TZ to be precise.
-    # To stay consistent, we’ll pass the literal day string and compute bounds in SQL would be best,
-    # but we’ll approximate here using UTC, then rely on WHERE overlap checks to be inclusive.
-    # A safe approach is to treat provided day as UTC day and rely on display conversion.
-    # If you want strict APP_TZ day bounds, set VITE_APP_TZ=UTC or add python zoneinfo logic.
-    d = datetime.fromisoformat(day_str)
+    d = date.fromisoformat(day_str)
   except ValueError:
     raise HTTPException(status_code=400, detail="Invalid day format, expected YYYY-MM-DD")
-
-  # Use UTC day bounds (00:00..24:00). For strict local-day semantics, swap this with zoneinfo conversion.
-  start_utc = datetime.combine(d.date(), time(0, 0, 0), tzinfo=timezone.utc)
-  end_utc = start_utc + timedelta(days=1)
-  return start_utc, end_utc
+  start_local = datetime(d.year, d.month, d.day, 0, 0, 0, tzinfo=_TZ)
+  end_local = start_local + timedelta(days=1)
+  return start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc)
 
 @router.get("/warnings", response_model=List[WarningItem])
 def get_warnings(
@@ -135,6 +134,7 @@ def get_warnings(
     day: str = Query(..., description="Plan day, format YYYY-MM-DD (interpreted in APP_TZ for display)")
 ):
     day_start_utc, day_end_utc = _local_midnight_bounds(day, APP_TZ)
+    day_date = date.fromisoformat(day)
 
     rows = db.execute(
         text(SQL),
@@ -142,6 +142,7 @@ def get_warnings(
             "day_start_utc": day_start_utc,
             "day_end_utc": day_end_utc,
             "tz": APP_TZ,
+            "day_date": day_date,
         },
     ).mappings().all()
 
