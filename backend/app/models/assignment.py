@@ -17,7 +17,7 @@ class Assignment(Base):
     role_id: Mapped[int | None] = mapped_column(ForeignKey("roles.id"), nullable=True)
 
     __table_args__ = (
-        UniqueConstraint("soldier_id", "start_at", "end_at", name="uq_assignments_soldier_window"),
+        # UniqueConstraint("soldier_id", "start_at", "end_at", name="uq_assignments_soldier_window"),
         Index("ix_assignments_soldier_time", "soldier_id", "start_at", "end_at"),
     )
 

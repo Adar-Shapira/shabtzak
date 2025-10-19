@@ -239,8 +239,8 @@ def reassign_assignment(body: ReassignRequest, db: Session = Depends(get_db)):
     s = db.get(Soldier, body.soldier_id)
     if not s:
         raise HTTPException(status_code=404, detail="Soldier not found")
-    
-        # Restriction: soldier cannot be assigned to this assignment's mission
+
+    # keep your restriction check
     if a.mission_id:
         restricted = db.query(SoldierMissionRestriction).filter(
             SoldierMissionRestriction.soldier_id == s.id,
@@ -249,16 +249,18 @@ def reassign_assignment(body: ReassignRequest, db: Session = Depends(get_db)):
         if restricted:
             raise HTTPException(status_code=400, detail="Soldier is restricted from this mission")
 
-
-    # Optional place to validate conflicts, department/role, vacations, etc.
-
     a.soldier_id = s.id
     db.add(a)
-    db.commit()
+
+    try:
+        db.commit()
+    except IntegrityError as e:
+        db.rollback()
+        # Shouldn’t happen once the constraint is gone, but return a clean error if anything else fires
+        raise HTTPException(status_code=400, detail="Cannot reassign due to a DB constraint") from e
+
     db.refresh(a)
 
-    # Build a minimal response that matches your roster item shape
-    # If you already have a helper for this, reuse it instead.
     start_local = a.start_at.astimezone(timezone.utc).isoformat()
     end_local = a.end_at.astimezone(timezone.utc).isoformat()
 
