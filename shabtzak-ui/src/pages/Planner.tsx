@@ -1,5 +1,5 @@
 // shabtzak-ui/src/pages/Planner.tsx
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import {
   listSoldiers,
@@ -97,18 +97,6 @@ function formatYMDHM(dtIso: string, fallbackTz: string) {
   }
 }
 
-// Prefer server-provided local strings if you added them; otherwise compute
-function fmtLocalShort(localIso: string | undefined, utcIso: string) {
-  if (localIso) return formatYMDHM(localIso, APP_TZ);
-  return formatYMDHM(utcIso, APP_TZ);
-}
-
-// Always format a UTC ISO timestamp into APP_TZ for consistent slot labels
-function fmtFromUTC(utcIso: string) {
-  return formatYMDHM(utcIso, APP_TZ);
-}
-
-
 // Robust epoch getter (uses server epoch if present)
 function epochMs(iso: string, serverEpoch?: number) {
   return typeof serverEpoch === "number" ? serverEpoch : new Date(iso).getTime();
@@ -117,6 +105,55 @@ function epochMs(iso: string, serverEpoch?: number) {
 // Stable slot key for grouping (mission + exact window)
 function slotKey(missionName: string, startMs: number, endMs: number) {
   return `${missionName}__${startMs}__${endMs}`;
+}
+
+// --- MissionRequirement helpers (schema-agnostic) ---
+function reqRoleName(r: MissionRequirement): string | null {
+  const x = r as any;
+  if (x?.role?.name) return String(x.role.name);
+  if (typeof x?.role_name === "string") return x.role_name;
+  if (typeof x?.role_id === "number") return `Role #${x.role_id}`;
+  return null;
+}
+function reqRoleId(r: MissionRequirement): number | null {
+  const x = r as any;
+  if (typeof x?.role_id === "number") return x.role_id;
+  if (x?.role?.id != null) {
+    const v = Number(x.role.id);
+    return Number.isFinite(v) ? v : null;
+  }
+  return null;
+}
+function reqCount(r: MissionRequirement): number {
+  const x = (r as any)?.count;
+  return typeof x === "number" ? x : 0;
+}
+
+function rolePredicate(roleId?: number | null, roleName?: string | null) {
+  return (s: Soldier) =>
+    (s.roles || []).some((rr: any) => {
+      if (roleId != null) {
+        // match id first (object role or role_id field)
+        return (typeof rr === "object" && rr?.id === roleId) ||
+               (typeof rr === "object" && rr?.role_id === roleId);
+      }
+      if (roleName) {
+        // fallback to name match (object or string)
+        return (typeof rr === "string" && rr === roleName) ||
+               (typeof rr === "object" && rr?.name === roleName);
+      }
+      return true;
+    });
+}
+
+function guessRoleFromMissionName(missionName?: string | null): string | null {
+  const n = (missionName || "").toLowerCase();
+  if (n.includes("officer"))   return "Officer";
+  if (n.includes("commander")) return "Commander";
+  if (n.includes("driver"))    return "Driver";
+  if (n.includes("guard"))     return "Guard";
+  // add more heuristics if you have other canonical roles
+  return null;
 }
 
 export default function Planner() {
@@ -130,15 +167,12 @@ export default function Planner() {
   const [rows, setRows] = useState<FlatRosterItem[]>([]);
 
   const [isChangeOpen, setIsChangeOpen] = useState(false);
-  const [allSoldiers, setAllSoldiers] = useState<Soldier[]>([]);
   const [visibleCandidates, setVisibleCandidates] = useState<Soldier[]>([]);
   const [pendingAssignmentId, setPendingAssignmentId] = useState<number | null>(null);
   const [candidateSearch, setCandidateSearch] = useState<string>("");
   const [changeLoading, setChangeLoading] = useState(false);
   const [changeError, setChangeError] = useState<string | null>(null);
-  const [pendingRoleName, setPendingRoleName] = useState<string | null>(null);
 
-  const [pendingMissionId, setPendingMissionId] = useState<number | null>(null);
   const [vacationsCache] = useState<Map<number, Vacation[]>>(new Map());
 
   const [warnings, setWarnings] = useState<PlannerWarning[]>([])
@@ -294,21 +328,6 @@ export default function Planner() {
         return 3; // other named roles in-between (alphabetical tie-break)
       };
 
-      const minutesSinceMidnight = (isoLike: string) => {
-        const dt = new Date(isoLike);
-        const parts = new Intl.DateTimeFormat(undefined, {
-          timeZone: APP_TZ,
-          hour: "2-digit",
-          minute: "2-digit",
-          hour12: false,
-        }).formatToParts(dt);
-        const get = (t: Intl.DateTimeFormatPartTypes) =>
-          parts.find((p) => p.type === t)?.value ?? "00";
-        const hh = parseInt(get("hour"), 10) || 0;
-        const mm = parseInt(get("minute"), 10) || 0;
-        return hh * 60 + mm;
-      };
-
       // Build rows keyed by unique slot: mission + role + hours
       // hours is "HH:MM-HH:MM" in APP_TZ
       type RowRec = {
@@ -451,13 +470,6 @@ export default function Planner() {
     }
   }
 
-    // === Candidate warning helpers for Change Soldier modal ===
-  const EIGHT_HOURS_MS = 8 * 60 * 60 * 1000;
-
-  function toMs(iso: string) {
-    return new Date(iso).getTime();
-  }
-
   /**
    * Given a soldier, check if assigning them to the currently pending assignment
    * (pendingAssignmentId) would create an OVERLAP or <8h REST issue
@@ -523,8 +535,6 @@ export default function Planner() {
 
   async function openChangeModal(assignmentId: number, roleName: string | null, missionId: number | null) {
     setPendingAssignmentId(assignmentId);
-    setPendingRoleName(roleName);
-    setPendingMissionId(missionId);
     setChangeError(null);
     setIsChangeOpen(true);
     setCandidateSearch("");
@@ -532,7 +542,6 @@ export default function Planner() {
     try {
       const soldiers = await listSoldiers();
       const byRole = roleName ? soldiers.filter(s => (s.roles || []).some(r => r.name === roleName)) : soldiers;
-      setAllSoldiers(byRole);
 
       const target = rows.find(r => r.id === assignmentId);
       if (!target) {
@@ -552,7 +561,6 @@ export default function Planner() {
       setVisibleCandidates(allowed);
     } catch {
       setChangeError("Failed to load soldiers");
-      setAllSoldiers([]);
       setVisibleCandidates([]);
     }
   }
@@ -567,7 +575,6 @@ export default function Planner() {
     const startHHMM = startLabel.slice(-5);
     const endHHMM   = endLabel.slice(-5);
 
-    // Build ISO strings in local time for vacation + modal warnings (declare BEFORE using)
     const startIsoLocal = startLabel.replace(" ", "T") + ":00";
     const endIsoLocal   = endLabel.replace(" ", "T") + ":00";
 
@@ -581,30 +588,50 @@ export default function Planner() {
     });
 
     setPendingAssignmentId(null);
-    setPendingRoleName(roleName ?? null);
-    setPendingMissionId(missionId);
     setChangeError(null);
     setIsChangeOpen(true);
     setCandidateSearch("");
 
-    // Load soldiers and prefilter by role (if provided), then apply vacation/overlap checks
     (async () => {
       try {
         const soldiers = await listSoldiers();
-        const roleFiltered = roleName
-          ? soldiers.filter(s => (s.roles || []).some(r => r.name === roleName))
-          : soldiers;
 
+        // 1) Decide the role to filter by
+        let finalRoleId: number | null = roleId ?? null;
+        let finalRoleName: string | null = roleName ?? null;
+
+        // Try requirements if not provided
+        if (finalRoleId == null && !finalRoleName) {
+          const reqMeta = requirementsByMission.get(missionId);
+          if (reqMeta && (reqMeta.requirements?.length || 0) > 0) {
+            const activeReqs = (reqMeta.requirements || []).filter(r => reqCount(r) > 0);
+            if (activeReqs.length === 1) {
+              finalRoleId = reqRoleId(activeReqs[0]);
+              finalRoleName = reqRoleName(activeReqs[0]);
+            }
+          }
+        }
+
+        // Fallback: infer from mission name if still missing
+        if (finalRoleId == null && !finalRoleName) {
+          const missionName = (allMissions.find(m => m.id === missionId)?.name) || "";
+          finalRoleName = guessRoleFromMissionName(missionName);
+        }
+
+        // 2) Filter by that role (exact id first; else name)
+        const pred = rolePredicate(finalRoleId, finalRoleName);
+        const roleFiltered = soldiers.filter(pred);
+
+        // 3) Then apply vacation/overlap checks (same as Unassigned path)
         const allowed: Soldier[] = [];
         for (const s of roleFiltered) {
           const ok = await isSoldierAllowedForSlot(s.id, day, startIsoLocal, endIsoLocal);
           if (ok) allowed.push(s);
         }
-        setAllSoldiers(roleFiltered);
+
         setVisibleCandidates(allowed);
       } catch {
         setChangeError("Failed to load soldiers");
-        setAllSoldiers([]);
         setVisibleCandidates([]);
       }
     })();
@@ -711,7 +738,6 @@ export default function Planner() {
       const ed = v.end_date;
 
       const startLt = new Date(`${sd}T00:00:00`);
-      const endLtEndOfDay = new Date(new Date(`${ed}T00:00:00`).getTime() + 24 * 60 * 60 * 1000);
 
       const isMiddleDay = startLt < dayStart && new Date(`${ed}T00:00:00`) > dayStart;
       const isStartDay = sd === dayISO && ed !== dayISO;
@@ -752,13 +778,7 @@ export default function Planner() {
       return rA.localeCompare(rB);
     });
   }, [rows]);
-
-  const missionIdByName = useMemo(() => {
-    const m = new Map<string, number>();
-    allMissions.forEach(mm => m.set(mm.name, mm.id));
-    return m;
-  }, [allMissions]);
-
+  
   type Grouped = Array<{
     missionId: number | null;
     missionName: string;
@@ -954,7 +974,7 @@ export default function Planner() {
         </button>
       </div>
 
-      {results && (
+      {/*results && (
         <div className="space-y-2">
           <h2 className="font-medium">Planner results</h2>
           <div className="border rounded divide-y">
@@ -974,7 +994,7 @@ export default function Planner() {
             ))}
           </div>
         </div>
-      )}
+      )*/}
 
       <section style={{ marginTop: 16, marginBottom: 16 }}>
         <h2 style={{ marginBottom: 8 }}>Warnings</h2>
@@ -1117,110 +1137,210 @@ export default function Planner() {
                 </tr>
               </thead>
               <tbody>
-                {grouped.map((g) =>
-                  g.slots.map((slot) => {
-                    const rowsForSlot = slot.items;
-                    const missionCell = (
-                      <td className="align-top p-2 border bg-gray-50" rowSpan={rowsForSlot.length || 1}>
-                        <div className="font-semibold">{g.missionName || "—"}</div>
-                      </td>
-                    );
-
-                    const timeCell = (
-                      <td className="align-top p-2 border bg-gray-50" rowSpan={rowsForSlot.length || 1}>
-                        <div className="text-xs text-gray-600">
-                          {slot.startLabel} → {slot.endLabel}
-                        </div>
-                      </td>
-                    );
-
-                    if (rowsForSlot.length === 0) {
-                      // Figure out this mission's requirements so we can show per-role Assign buttons
-                      const reqMeta = g.missionId != null ? requirementsByMission.get(g.missionId) : undefined;
-                      const reqs = reqMeta?.requirements ?? [];
-                      const explicitCount = reqs.reduce((sum: number, r) => sum + (r.count || 0), 0); // typed sum
-                      const totalNeeded = reqMeta?.total_needed ?? 0;
-                      const genericSlots = Math.max(0, Number(totalNeeded) - Number(explicitCount));
-
-                      return (
-                        <tr key={slot.key}>
-                          {missionCell}
-                          {timeCell}
-                          <td className="p-2 border italic text-gray-500" colSpan={2}>
-                            <div>No assignees</div>
-
-                            {/* Role-specific assignment buttons */}
-                            <div className="mt-2 flex flex-wrap gap-6 items-center">
-                              {reqs.map((r: any, idx: number) => {
-                                const roleName = r?.role?.name ?? r?.role_name ?? `Role #${r?.role_id ?? "?"}`;
-                                const count = r?.count ?? 0;
-                                if (count <= 0) return null;
-                                return (
-                                  <div key={idx} className="flex items-center gap-2">
-                                    <span className="text-sm text-gray-600">{roleName} × {count}</span>
-                                    <button
-                                      type="button"
-                                      className="border rounded px-2 py-1"
-                                      onClick={() =>
-                                        g.missionId &&
-                                        openChangeModalForEmptySlot(
-                                          g.missionId,
-                                          slot.startLabel,
-                                          slot.endLabel,
-                                          roleName,
-                                          r?.role_id ?? null
-                                        )
-                                      }
-                                    >
-                                      Assign {roleName}
-                                    </button>
-                                  </div>
-                                );
-                              })}
-
-                              {genericSlots > 0 && (
-                                <div className="flex items-center gap-2">
-                                  <span className="text-sm text-gray-600">Generic × {genericSlots}</span>
-                                  <button
-                                    type="button"
-                                    className="border rounded px-2 py-1"
-                                    onClick={() =>
-                                      g.missionId &&
-                                      openChangeModalForEmptySlot(g.missionId, slot.startLabel, slot.endLabel, null, null)
-                                    }
-                                  >
-                                    Assign (Any)
-                                  </button>
-                                </div>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    }
-
-                    return rowsForSlot.map((r, idx) => (
-                      <tr key={`${slot.key}__${r.id}`} className="border-t">
-                        {idx === 0 && missionCell}
-                        {idx === 0 && timeCell}
-                        <td className="p-2 border">{r.role ?? ""}</td>
-                        <td>
-                          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                            <span>{r.soldier_name || "Unassigned"}</span>
-                            <button
-                              type="button"
-                              onClick={() => openChangeModal(r.id, r.role, r.mission?.id || null)}
-                              style={{ padding: "2px 8px" }}
-                            >
-                              Change
-                            </button>
-                          </div>
+                {grouped.map((g, gIdx) => (
+                  <React.Fragment key={`g-${gIdx}`}>
+                    {/* Mission divider (skip before the first mission) */}
+                    {gIdx > 0 && (
+                      <tr aria-hidden>
+                        <td colSpan={4} style={{ padding: 0 }}>
+                          <div
+                            style={{
+                              height: 1,
+                              width: "100%",
+                              backgroundColor: "#9ca3af", // gray-400
+                              opacity: 0.9,
+                            }}
+                          />
                         </td>
                       </tr>
-                    ));
-                    })
-                  )}
-                </tbody>
+                    )}
+
+                    {g.slots.map((slot, sIdx) => {
+                      const rowsForSlot = slot.items;
+
+                      // Slot divider (before every slot except the first within a mission)
+                      const slotDivider =
+                        sIdx > 0 ? (
+                          <tr key={`ssep-${gIdx}-${sIdx}`} aria-hidden>
+                            <td colSpan={4} style={{ padding: 0 }}>
+                              <div
+                                style={{
+                                  height: 1,
+                                  width: "100%",
+                                  backgroundColor: "#9ca3af", // gray-400
+                                  opacity: 0.7,
+                                }}
+                              />
+                            </td>
+                          </tr>
+                        ) : null;
+
+                      const missionCell = (
+                        <td
+                          className="align-top p-2 border bg-gray-50"
+                          rowSpan={rowsForSlot.length || 1}
+                        >
+                          <div className="font-semibold">{g.missionName || "—"}</div>
+                        </td>
+                      );
+
+                      const timeCell = (
+                        <td
+                          className="align-top p-2 border bg-gray-50"
+                          rowSpan={rowsForSlot.length || 1}
+                        >
+                          <div className="text-xs text-gray-600">
+                            {slot.startLabel} → {slot.endLabel}
+                          </div>
+                        </td>
+                      );
+
+                      // EMPTY SLOT (seeded by mission/slot config)
+                      if (rowsForSlot.length === 0) {
+                        const reqMeta =
+                          g.missionId != null ? requirementsByMission.get(g.missionId) : undefined;
+                        const reqs = reqMeta?.requirements ?? [];
+                        const explicitCount = reqs.reduce((sum, r) => sum + reqCount(r), 0);
+                        const totalNeeded = reqMeta?.total_needed ?? 0;
+                        const genericSlots = Math.max(0, Number(totalNeeded) - Number(explicitCount));
+
+                        return (
+                          <React.Fragment key={slot.key}>
+                            {slotDivider}
+                            <tr>
+                              {missionCell}
+                              {timeCell}
+
+                              {/* Role column left blank for a seeded empty slot */}
+                              <td className="p-2 border text-gray-400 italic">—</td>
+
+                              {/* Soldier column with "No assignees" + Change button */}
+                              <td className="p-2 border">
+                                <div className="flex items-center gap-2">
+                                  <span className="italic text-gray-500">No assignees</span>
+
+                                  {(() => {
+                                    // If exactly one explicit role is required, open the modal filtered to that role.
+                                    const activeReqs = (reqs || []).filter((r) => reqCount(r) > 0);
+                                    const singleRoleReq = activeReqs.length === 1 ? activeReqs[0] : null;
+                                    const singleRoleName = singleRoleReq ? reqRoleName(singleRoleReq) : null;
+                                    const singleRoleId = singleRoleReq ? reqRoleId(singleRoleReq) : null;
+
+                                    return (
+                                      <button
+                                        type="button"
+                                        className="border rounded px-2 py-1"
+                                        onClick={() =>
+                                          g.missionId &&
+                                          openChangeModalForEmptySlot(
+                                            g.missionId,
+                                            slot.startLabel,
+                                            slot.endLabel,
+                                            singleRoleName,   // filter if exactly one role is required
+                                            singleRoleId
+                                          )
+                                        }
+                                      >
+                                        Change
+                                      </button>
+                                    );
+                                  })()}
+                                </div>
+
+                                {/* Optional: keep the role-specific quick-assign actions below */}
+                                {(reqs.length > 0 || genericSlots > 0) && (
+                                  <div className="mt-2 flex flex-wrap gap-6 items-center">
+                                    {reqs.map((r, idx) => {
+                                      const roleName = reqRoleName(r) ?? `Role #${reqRoleId(r) ?? "?"}`;
+                                      const count = reqCount(r);
+                                      if (count <= 0) return null;
+                                      return (
+                                        <div key={idx} className="flex items-center gap-2">
+                                          <span className="text-sm text-gray-600">
+                                            {roleName} × {count}
+                                          </span>
+                                          <button
+                                            type="button"
+                                            className="border rounded px-2 py-1"
+                                            onClick={() =>
+                                              g.missionId &&
+                                              openChangeModalForEmptySlot(
+                                                g.missionId,
+                                                slot.startLabel,
+                                                slot.endLabel,
+                                                reqRoleName(r),
+                                                reqRoleId(r)
+                                              )
+                                            }
+                                          >
+                                            Assign {roleName}
+                                          </button>
+                                        </div>
+                                      );
+                                    })}
+
+                                    {genericSlots > 0 && (
+                                      <div className="flex items-center gap-2">
+                                        <span className="text-sm text-gray-600">
+                                          Generic × {genericSlots}
+                                        </span>
+                                        <button
+                                          type="button"
+                                          className="border rounded px-2 py-1"
+                                          onClick={() =>
+                                            g.missionId &&
+                                            openChangeModalForEmptySlot(
+                                              g.missionId,
+                                              slot.startLabel,
+                                              slot.endLabel,
+                                              null,
+                                              null
+                                            )
+                                          }
+                                        >
+                                          Assign (Any)
+                                        </button>
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                              </td>
+                            </tr>
+                          </React.Fragment>
+                        );
+                      }
+
+                      // NON-EMPTY SLOT (render actual assignments)
+                      return (
+                        <React.Fragment key={slot.key}>
+                          {slotDivider}
+                          {rowsForSlot.map((r, idx) => (
+                            <tr key={`${slot.key}__${r.id}`}>
+                              {idx === 0 && missionCell}
+                              {idx === 0 && timeCell}
+                              <td className="p-2 border">{r.role ?? ""}</td>
+                              <td className="border">
+                                <div className="flex items-center gap-2">
+                                  <span>{r.soldier_name || <span  style={{ color: "crimson" }}>Unassigned</span>}</span>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      openChangeModal(r.id, r.role, r.mission?.id || null)
+                                    }
+                                    className="border rounded px-2 py-1"
+                                  >
+                                    Change
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </React.Fragment>
+                      );
+                    })}
+                  </React.Fragment>
+                ))}
+              </tbody>
               </table>
             </>
           )}
