@@ -1211,13 +1211,31 @@ export default function Planner() {
                               {missionCell}
                               {timeCell}
 
-                              {/* Role column left blank for a seeded empty slot */}
-                              <td className="p-2 border text-gray-400 italic">—</td>
+                              {(() => {
+                                    // Decide a display role for the empty slot
+                                    const activeReqs = (reqs || []).filter((r) => reqCount(r) > 0);
+                                    let displayRoleName: string | null = null;
+
+                                    if (activeReqs.length === 1) {
+                                      // exactly one explicit role required
+                                      displayRoleName = reqRoleName(activeReqs[0]);
+                                    } else if (activeReqs.length === 0) {
+                                      // no explicit role – try to infer from the mission name (e.g., "Base Officer" -> "Officer")
+                                      displayRoleName = guessRoleFromMissionName(g.missionName);
+                                      // if nothing inferred but there are generic slots, show "Any"
+                                      if (!displayRoleName && genericSlots > 0) displayRoleName = "Any";
+                                    }
+
+                                    return (
+                                      // Role column (now shows the derived role)
+                                      <td className="p-2 border">{displayRoleName ?? "—"}</td>
+                                    );
+                                  })()}
 
                               {/* Soldier column with "No assignees" + Change button */}
                               <td className="p-2 border">
                                 <div className="flex items-center gap-2">
-                                  <span className="italic text-gray-500">No assignees</span>
+                                  <span className="italic text-gray-500" style={{ color: "crimson" }}>Unassigned</span>
 
                                   {(() => {
                                     // If exactly one explicit role is required, open the modal filtered to that role.
