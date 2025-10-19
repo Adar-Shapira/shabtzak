@@ -1110,7 +1110,8 @@ export default function Planner() {
             <table className="min-w-[760px] w-full text-sm">
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="text-left p-2 border w-[320px]">Mission &amp; Time Slot</th>
+                  <th className="text-left p-2 border w-[220px]">Mission</th>
+                  <th className="text-left p-2 border w-[260px]">Time Slot</th>
                   <th className="text-left p-2 border">Role</th>
                   <th className="text-left p-2 border">Soldier</th>
                 </tr>
@@ -1119,14 +1120,16 @@ export default function Planner() {
                 {grouped.map((g) =>
                   g.slots.map((slot) => {
                     const rowsForSlot = slot.items;
-                    const headerCell = (
+                    const missionCell = (
                       <td className="align-top p-2 border bg-gray-50" rowSpan={rowsForSlot.length || 1}>
                         <div className="font-semibold">{g.missionName || "—"}</div>
-                        <div className="text-xs text-gray-600 mt-1">
+                      </td>
+                    );
+
+                    const timeCell = (
+                      <td className="align-top p-2 border bg-gray-50" rowSpan={rowsForSlot.length || 1}>
+                        <div className="text-xs text-gray-600">
                           {slot.startLabel} → {slot.endLabel}
-                        </div>
-                        <div className="text-xs text-gray-500 mt-1">
-                          {rowsForSlot.length} assignment{rowsForSlot.length !== 1 ? "s" : ""}
                         </div>
                       </td>
                     );
@@ -1141,7 +1144,8 @@ export default function Planner() {
 
                       return (
                         <tr key={slot.key}>
-                          {headerCell}
+                          {missionCell}
+                          {timeCell}
                           <td className="p-2 border italic text-gray-500" colSpan={2}>
                             <div>No assignees</div>
 
@@ -1159,7 +1163,13 @@ export default function Planner() {
                                       className="border rounded px-2 py-1"
                                       onClick={() =>
                                         g.missionId &&
-                                        openChangeModalForEmptySlot(g.missionId, slot.startLabel, slot.endLabel, roleName, r?.role_id ?? null)
+                                        openChangeModalForEmptySlot(
+                                          g.missionId,
+                                          slot.startLabel,
+                                          slot.endLabel,
+                                          roleName,
+                                          r?.role_id ?? null
+                                        )
                                       }
                                     >
                                       Assign {roleName}
@@ -1168,7 +1178,6 @@ export default function Planner() {
                                 );
                               })}
 
-                              {/* Generic (Any role) assignment button, if mission.total_needed requires more */}
                               {genericSlots > 0 && (
                                 <div className="flex items-center gap-2">
                                   <span className="text-sm text-gray-600">Generic × {genericSlots}</span>
@@ -1191,23 +1200,24 @@ export default function Planner() {
                     }
 
                     return rowsForSlot.map((r, idx) => (
-                        <tr key={`${slot.key}__${r.id}`} className="border-t">
-                          {idx === 0 && headerCell}
-                          <td className="p-2 border">{r.role ?? ""}</td>
-                          <td>
-                            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                              <span>{r.soldier_name || "Unassigned"}</span>
-                              <button
-                                type="button"
-                                onClick={() => openChangeModal(r.id, r.role, r.mission?.id || null)}
-                                style={{ padding: "2px 8px" }}
-                              >
-                                Change
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ));
+                      <tr key={`${slot.key}__${r.id}`} className="border-t">
+                        {idx === 0 && missionCell}
+                        {idx === 0 && timeCell}
+                        <td className="p-2 border">{r.role ?? ""}</td>
+                        <td>
+                          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                            <span>{r.soldier_name || "Unassigned"}</span>
+                            <button
+                              type="button"
+                              onClick={() => openChangeModal(r.id, r.role, r.mission?.id || null)}
+                              style={{ padding: "2px 8px" }}
+                            >
+                              Change
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ));
                     })
                   )}
                 </tbody>
