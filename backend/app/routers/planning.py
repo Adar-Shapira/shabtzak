@@ -39,6 +39,10 @@ class FillResponse(BaseModel):
     day: str
     results: List[PlanResultItem]
 
+class UnassignRequest(BaseModel):
+    assignment_id: int
+
+
 def _parse_day(day_str: str) -> date:
     try:
         return date.fromisoformat(day_str)
@@ -307,6 +311,50 @@ def _load_context(db: Session) -> dict:
         "all_soldiers": soldiers,  # new: pool for generic slots
     }
 
+def _collect_candidates_for_slot(
+    pool,
+    m_id: int,
+    start_at: datetime,
+    end_at: datetime,
+    stats_by_soldier: Dict[int, SoldierStats],
+    restricted_pairs: set[tuple[int, int]],
+    existing_same_window: set[tuple[int, datetime, datetime]],
+    occupied_by_soldier: Dict[int, List[tuple[datetime, datetime]]],
+    vacation_blocks: Dict[int, List[tuple[datetime, datetime]]],
+    rr_start_idx: int,
+    strict: bool,
+) -> List[tuple[float, int, Soldier]]:
+    """Return scored candidates. If strict=False, relax the 8h rest checks."""
+    scored: List[tuple[float, int, Soldier]] = []
+    for i, cand in enumerate(pool):
+        # never violate hard constraints
+        if (cand.id, m_id) in restricted_pairs:
+            continue
+        if (cand.id, start_at, end_at) in existing_same_window:
+            continue
+        if any(_overlaps(start_at, end_at, s, e) for (s, e) in occupied_by_soldier.get(cand.id, [])):
+            continue
+        if any(bs_utc < end_at and be_utc > start_at for (bs_utc, be_utc) in vacation_blocks.get(cand.id, [])):
+            continue
+
+        st = stats_by_soldier.setdefault(cand.id, SoldierStats())
+
+        if strict:
+            # hard 8h floor around the candidate
+            if st.last_end_at is not None and (start_at - st.last_end_at) < EIGHT_HOURS:
+                continue
+            occ_list = occupied_by_soldier.get(cand.id, [])
+            if not _has_8h_rest_around(occ_list, start_at, end_at, EIGHT_HOURS):
+                continue
+        # else: soft mode → allow <8h; warnings will be produced by your warnings endpoint
+
+        base_score = _score_candidate(cand, m_id, start_at, end_at, st)
+        rr_distance = (i - rr_start_idx) % max(1, len(pool))
+        score = base_score + rr_distance * 0.001
+        scored.append((score, i, cand))
+
+    scored.sort(key=lambda t: (t[0], t[1]))
+    return scored
 
 @router.post("/fill", response_model=FillResponse)
 def fill(req: FillRequest, db: Session = Depends(get_db)):
@@ -428,55 +476,41 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
                     # round-robin starting point for this role (or None)
                     start_idx = rr_index.get(role_id, 0)
 
-                    # Build scored candidate list for this specific slot
-                    # We minimize score; tie-break by prior round-robin cursor.
-                    scored: List[tuple[float, int, Soldier]] = []
-                    for i, cand in enumerate(pool):
-                        if cand.id in assigned_here:
-                            continue
+                    # 1) Strict pass (keeps 8h-rest rules)
+                    scored = _collect_candidates_for_slot(
+                        pool=pool,
+                        m_id=m.id,
+                        start_at=start_at,
+                        end_at=end_at,
+                        stats_by_soldier=stats_by_soldier,
+                        restricted_pairs=restricted_pairs,
+                        existing_same_window=existing_same_window,
+                        occupied_by_soldier=occupied_by_soldier,
+                        vacation_blocks=vacation_blocks,
+                        rr_start_idx=start_idx,
+                        strict=True,
+                    )
 
-                        # vacation block check (precomputed)
-                        blocked_list = vacation_blocks.get(cand.id, [])
-                        is_blocked = any(bs_utc < end_at and be_utc > start_at for bs_utc, be_utc in blocked_list)
-                        if is_blocked:
-                            continue
+                    # 2) Soft fallback (relaxes 8h-rest, still forbids overlap/vacation/restrictions)
+                    if not scored:
+                        scored = _collect_candidates_for_slot(
+                            pool=pool,
+                            m_id=m.id,
+                            start_at=start_at,
+                            end_at=end_at,
+                            stats_by_soldier=stats_by_soldier,
+                            restricted_pairs=restricted_pairs,
+                            existing_same_window=existing_same_window,
+                            occupied_by_soldier=occupied_by_soldier,
+                            vacation_blocks=vacation_blocks,
+                            rr_start_idx=start_idx,
+                            strict=False,
+                        )
 
-                        # mission restriction
-                        if (cand.id, m.id) in restricted_pairs:
-                            continue
-
-                        # identical window conflict
-                        if (cand.id, start_at, end_at) in existing_same_window:
-                            continue
-
-                        # general overlap against any of this soldier's occupied intervals
-                        if any(_overlaps(start_at, end_at, occ_s, occ_e) for (occ_s, occ_e) in occupied_by_soldier.get(cand.id, [])):
-                            continue
-
-                        # hard 8h rest floor (avoid REST warnings)
-                        st = stats_by_soldier.setdefault(cand.id, SoldierStats())
-                        if st.last_end_at is not None:
-                            if (start_at - st.last_end_at) < EIGHT_HOURS:
-                                continue
-
-                        # also require 8h before and after relative to already-occupied intervals
-                        occ_list = occupied_by_soldier.get(cand.id, [])
-                        if not _has_8h_rest_around(occ_list, start_at, end_at, EIGHT_HOURS):
-                            continue
-
-
-                        # score and tie-break with round-robin cursor
-                        base_score = _score_candidate(cand, m.id, start_at, end_at, st)
-                        start_idx = rr_index.get(role_id, 0)
-                        rr_distance = (i - start_idx) % max(1, len(pool))
-                        score = base_score + rr_distance * 0.001
-
-                        scored.append((score, i, cand))
-
-                    # choose the lowest-score candidate
+                    # If we still have nobody, leave slot empty
                     if not scored:
                         continue
-                    scored.sort(key=lambda t: (t[0], t[1]))
+
                     chosen_score, chosen_i, soldier = scored[0]
 
                     # advance RR cursor to next after chosen_i for this role
@@ -515,3 +549,19 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
     db.commit()
     return FillResponse(day=req.day, results=results)
 
+@router.post("/unassign_assignment")
+def unassign_assignment(req: UnassignRequest, db: Session = Depends(get_db)):
+    a = db.get(Assignment, req.assignment_id)
+    if not a:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+
+    a.soldier_id = None
+    db.add(a)
+    db.commit()
+    db.refresh(a)
+
+    return {
+        "id": a.id,
+        "soldier_id": None,
+        "soldier_name": None,
+    }

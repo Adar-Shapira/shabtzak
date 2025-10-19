@@ -4,12 +4,15 @@ import { api } from "../api";
 import {
   listSoldiers,
   reassignAssignment,
+  unassignAssignment, 
   type Soldier,
   clearPlan,
   listMissions,
   listMissionSlots,
   type Mission,
   type MissionSlot,
+  getMissionRequirements,
+  type MissionRequirement,
 } from "../api";
 
 import Modal from "../components/Modal";
@@ -33,7 +36,7 @@ type FlatRosterItem = {
   id: number;
   mission: { id: number | null; name: string | null } | null;
   role: string | null;
-  soldier_id: number;
+  soldier_id: number | null;
   soldier_name: string;
   start_at: string; // ISO
   end_at: string;   // ISO
@@ -141,6 +144,17 @@ export default function Planner() {
   const [warnings, setWarnings] = useState<PlannerWarning[]>([])
   const [warnLoading, setWarnLoading] = useState(false)
   const [warnError, setWarnError] = useState<string | null>(null)
+
+  const [pendingEmptySlot, setPendingEmptySlot] = useState<null | {
+    missionId: number;
+    roleId: number | null;      // if you want role-aware empty slots later
+    startHHMM: string;          // "HH:MM"
+    endHHMM: string;
+  }>(null);
+
+  const [requirementsByMission, setRequirementsByMission] = useState<
+    Map<number, { total_needed?: number | null; requirements: MissionRequirement[] }>
+  >(new Map());
 
   // missions and their slot patterns
   const [allMissions, setAllMissions] = useState<Mission[]>([]);
@@ -517,6 +531,52 @@ export default function Planner() {
     }
   }
 
+  function openChangeModalForEmptySlot(
+    missionId: number,
+    startLabel: string,    // "YYYY-MM-DD HH:MM"
+    endLabel: string,      // "YYYY-MM-DD HH:MM"
+    roleName?: string | null,
+    roleId?: number | null
+  ) {
+    const startHHMM = startLabel.slice(-5);
+    const endHHMM   = endLabel.slice(-5);
+
+    setPendingEmptySlot({ missionId, roleId: roleId ?? null, startHHMM, endHHMM });
+
+    setPendingAssignmentId(null);
+    setPendingRoleName(roleName ?? null);
+    setPendingMissionId(missionId);
+    setChangeError(null);
+    setIsChangeOpen(true);
+    setCandidateSearch("");
+
+    // Build ISO strings in local time for vacation checks
+    const startIsoLocal = startLabel.replace(" ", "T") + ":00";
+    const endIsoLocal   = endLabel.replace(" ", "T") + ":00";
+
+    // Load soldiers and prefilter by role (if provided), then apply vacation/overlap checks
+    (async () => {
+      try {
+        const soldiers = await listSoldiers();
+        const roleFiltered = roleName
+          ? soldiers.filter(s => (s.roles || []).some(r => r.name === roleName))
+          : soldiers;
+
+        const allowed: Soldier[] = [];
+        for (const s of roleFiltered) {
+          const ok = await isSoldierAllowedForSlot(s.id, day, startIsoLocal, endIsoLocal);
+          if (ok) allowed.push(s);
+        }
+        setAllSoldiers(roleFiltered);
+        setVisibleCandidates(allowed);
+      } catch {
+        setChangeError("Failed to load soldiers");
+        setAllSoldiers([]);
+        setVisibleCandidates([]);
+      }
+    })();
+  }
+
   async function handleReassign(soldierId: number) {
     if (!pendingAssignmentId) return;
     setChangeLoading(true);
@@ -550,6 +610,34 @@ export default function Planner() {
 
     } catch (e: any) {
       setChangeError(e?.response?.data?.detail ?? "Failed to reassign");
+    } finally {
+      setChangeLoading(false);
+    }
+  }
+
+  async function handleUnassign() {
+    if (!pendingAssignmentId) return;
+    setChangeLoading(true);
+    setChangeError(null);
+    try {
+      const updated = await unassignAssignment({ assignment_id: pendingAssignmentId });
+
+      // Update the local table state (mirror of handleReassign)
+      setRows((prev) =>
+        prev.map((it) =>
+          it.id === updated.id
+            ? { ...it, soldier_id: updated.soldier_id, soldier_name: "" }
+            : it
+        )
+      );
+
+      await loadAllAssignments();
+      await loadWarnings(day);
+
+      setIsChangeOpen(false);
+      setPendingAssignmentId(null);
+    } catch (e: any) {
+      setChangeError(e?.response?.data?.detail ?? "Failed to unassign");
     } finally {
       setChangeLoading(false);
     }
@@ -632,7 +720,14 @@ export default function Planner() {
     });
   }, [rows]);
 
+  const missionIdByName = useMemo(() => {
+    const m = new Map<string, number>();
+    allMissions.forEach(mm => m.set(mm.name, mm.id));
+    return m;
+  }, [allMissions]);
+
   type Grouped = Array<{
+    missionId: number | null;
     missionName: string;
     slots: Array<{
       key: string;
@@ -701,6 +796,12 @@ export default function Planner() {
       }
     }
 
+    // map mission name -> Mission (for id & requirements)
+    const missionByName = new Map<string, Mission>();
+    for (const m of allMissions) {
+      missionByName.set(m.name ?? "", m);
+    }
+
     // collect missions alphabetically
     const missionOrder = Array.from(
       new Set([
@@ -735,7 +836,10 @@ export default function Planner() {
         slotArr.push({ key: k, startLabel: v.startLabel, endLabel: v.endLabel, items: v.items });
       }
 
-      result.push({ missionName: m, slots: slotArr });
+      const meta = missionByName.get(m);
+      const missionId = meta?.id ?? null;
+
+      result.push({ missionId, missionName: m, slots: slotArr });
     }
 
     return result;
@@ -751,13 +855,30 @@ export default function Planner() {
       try {
         const missions = await listMissions();
         setAllMissions(missions);
-        const entries: Array<[number, MissionSlot[]]> = await Promise.all(
+
+        // slots
+        const slotsEntries: Array<[number, MissionSlot[]]> = await Promise.all(
           missions.map(async (m) => [m.id, await listMissionSlots(m.id)] as [number, MissionSlot[]])
         );
-        setSlotsByMission(new Map(entries));
+        setSlotsByMission(new Map(slotsEntries));
+
+        // requirements + total_needed
+        const reqEntries: Array<[number, { total_needed?: number | null; requirements: MissionRequirement[] }]> =
+          await Promise.all(
+            missions.map(async (m) => {
+              try {
+                const r = await getMissionRequirements(m.id);
+                return [m.id, { total_needed: r.total_needed ?? null, requirements: r.requirements ?? [] }];
+              } catch {
+                return [m.id, { total_needed: m.total_needed ?? null, requirements: [] }];
+              }
+            })
+          );
+        setRequirementsByMission(new Map(reqEntries));
       } catch {
         setAllMissions([]);
         setSlotsByMission(new Map());
+        setRequirementsByMission(new Map());
       }
     })();
   }, [day]);
@@ -862,12 +983,15 @@ export default function Planner() {
         <h2 className="font-medium">Assignments</h2>
 
         {listBusy && <div className="border rounded p-3 text-gray-500">Loading…</div>}
-        {!listBusy && rows.length === 0 && (
-          <div className="border rounded p-3 text-gray-500">No assignments for the selected day.</div>
-        )}
 
-        {!listBusy && rows.length > 0 && (
+        {!listBusy && (
           <div className="border rounded overflow-x-auto">
+            {/* If absolutely nothing to show (no missions/slots configured), show a tiny hint */}
+            {grouped.every(g => g.slots.length === 0) ? (
+              <div className="p-3 text-gray-500">No missions/slots configured for this day.</div>
+            ) : (
+              <>
+                {/* your existing Modal and <table> stay exactly the same below */}
             <Modal open={isChangeOpen} onClose={() => setIsChangeOpen(false)} title="Change Soldier">
               {changeError && <div style={{ color: "red", marginBottom: 8 }}>{changeError}</div>}
               {changeLoading && <div>Applying change…</div>}
@@ -925,6 +1049,28 @@ export default function Planner() {
                   ))}
                 </div>
               )}
+              {/* Footer actions */}
+              {!changeLoading && (
+                <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
+                  <button
+                    type="button"
+                    className="border rounded px-2 py-1"
+                    title="Leave this slot unassigned"
+                    onClick={async () => {
+                      if (pendingAssignmentId) {
+                        await handleUnassign();     // actually unassign existing assignment
+                      } else {
+                        // empty slot: nothing to unassign, just close
+                        setIsChangeOpen(false);
+                        setPendingEmptySlot(null);
+                        setPendingAssignmentId(null);
+                      }
+                    }}
+                  >
+                    No Assignee
+                  </button>
+                </div>
+              )}
             </Modal>
 
             <table className="min-w-[760px] w-full text-sm">
@@ -952,40 +1098,90 @@ export default function Planner() {
                     );
 
                     if (rowsForSlot.length === 0) {
-                      // Shouldn’t happen, but keep safe:
+                      // Figure out this mission's requirements so we can show per-role Assign buttons
+                      const reqMeta = g.missionId != null ? requirementsByMission.get(g.missionId) : undefined;
+                      const reqs = reqMeta?.requirements ?? [];
+                      const explicitCount = reqs.reduce((sum: number, r) => sum + (r.count || 0), 0); // typed sum
+                      const totalNeeded = reqMeta?.total_needed ?? 0;
+                      const genericSlots = Math.max(0, Number(totalNeeded) - Number(explicitCount));
+
                       return (
                         <tr key={slot.key}>
                           {headerCell}
-                          <td className="p-2 border italic text-gray-500" colSpan={2}>No assignees</td>
+                          <td className="p-2 border italic text-gray-500" colSpan={2}>
+                            <div>No assignees</div>
+
+                            {/* Role-specific assignment buttons */}
+                            <div className="mt-2 flex flex-wrap gap-6 items-center">
+                              {reqs.map((r: any, idx: number) => {
+                                const roleName = r?.role?.name ?? r?.role_name ?? `Role #${r?.role_id ?? "?"}`;
+                                const count = r?.count ?? 0;
+                                if (count <= 0) return null;
+                                return (
+                                  <div key={idx} className="flex items-center gap-2">
+                                    <span className="text-sm text-gray-600">{roleName} × {count}</span>
+                                    <button
+                                      type="button"
+                                      className="border rounded px-2 py-1"
+                                      onClick={() =>
+                                        g.missionId &&
+                                        openChangeModalForEmptySlot(g.missionId, slot.startLabel, slot.endLabel, roleName, r?.role_id ?? null)
+                                      }
+                                    >
+                                      Assign {roleName}
+                                    </button>
+                                  </div>
+                                );
+                              })}
+
+                              {/* Generic (Any role) assignment button, if mission.total_needed requires more */}
+                              {genericSlots > 0 && (
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm text-gray-600">Generic × {genericSlots}</span>
+                                  <button
+                                    type="button"
+                                    className="border rounded px-2 py-1"
+                                    onClick={() =>
+                                      g.missionId &&
+                                      openChangeModalForEmptySlot(g.missionId, slot.startLabel, slot.endLabel, null, null)
+                                    }
+                                  >
+                                    Assign (Any)
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          </td>
                         </tr>
                       );
                     }
 
                     return rowsForSlot.map((r, idx) => (
-                      <tr key={`${slot.key}__${r.id}`} className="border-t">
-                        {idx === 0 && headerCell}
-                        <td className="p-2 border">{r.role ?? ""}</td>
-                        <td>
-                          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                            <span>{r.soldier_name || "Unassigned"}</span>
-                            <button
-                              type="button"
-                              onClick={() => openChangeModal(r.id, r.role, r.mission?.id || null)}
-                              style={{ padding: "2px 8px" }}
-                            >
-                              Change
-                            </button>
-                          </div>
-                        </td>
-
-                      </tr>
-                    ));
-                  })
-                )}
-              </tbody>
-            </table>
-          </div>
-        )}
+                        <tr key={`${slot.key}__${r.id}`} className="border-t">
+                          {idx === 0 && headerCell}
+                          <td className="p-2 border">{r.role ?? ""}</td>
+                          <td>
+                            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                              <span>{r.soldier_name || "Unassigned"}</span>
+                              <button
+                                type="button"
+                                onClick={() => openChangeModal(r.id, r.role, r.mission?.id || null)}
+                                style={{ padding: "2px 8px" }}
+                              >
+                                Change
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ));
+                    })
+                  )}
+                </tbody>
+              </table>
+            </>
+          )}
+        </div>
+      )}
       </div>
     </div>
   );

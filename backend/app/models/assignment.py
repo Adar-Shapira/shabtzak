@@ -13,7 +13,7 @@ class Assignment(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     mission_id: Mapped[int] = mapped_column(ForeignKey("missions.id"), nullable=False)
-    soldier_id: Mapped[int] = mapped_column(ForeignKey("soldiers.id"), nullable=False)
+    soldier_id: Mapped[int] = mapped_column(ForeignKey("soldiers.id"), nullable=True)
     role_id: Mapped[int | None] = mapped_column(ForeignKey("roles.id"), nullable=True)
 
     __table_args__ = (

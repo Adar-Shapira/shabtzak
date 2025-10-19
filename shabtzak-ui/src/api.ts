@@ -202,3 +202,24 @@ export async function listSoldierVacations(soldierId: number): Promise<Vacation[
   const r = await api.get(`/vacations/soldiers/${soldierId}`);
   return r.data as Vacation[];
 }
+
+export async function createAssignment(payload: {
+  day: string;              // "YYYY-MM-DD"
+  mission_id: number;
+  role_id?: number | null;  // optional/nullable
+  start_time: string;       // "HH:MM"
+  end_time: string;         // "HH:MM"
+  soldier_id?: number | null;
+}) {
+  const { data } = await api.post("/assignments/create", payload);
+  return data; // should match FlatRosterItem-ish shape
+}
+
+export async function deleteAssignment(id: number) {
+  await api.delete(`/assignments/${id}`);
+}
+
+export async function unassignAssignment(payload: { assignment_id: number }): Promise<{ id: number; soldier_id: number | null; soldier_name: string | null; }> {
+  const { data } = await api.post("/plan/unassign_assignment", payload);
+  return data;
+}

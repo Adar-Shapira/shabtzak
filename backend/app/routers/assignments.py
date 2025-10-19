@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional, List
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from pydantic import BaseModel, field_validator
 from sqlalchemy import select, and_, delete
 from sqlalchemy.orm import Session, joinedload
@@ -32,7 +32,7 @@ class RosterItem(BaseModel):
     id: int
     mission: dict
     role: Optional[str] = None
-    soldier_id: int
+    soldier_id: Optional[int] = None
     soldier_name: str
     start_at: datetime
     end_at: datetime
@@ -106,7 +106,7 @@ def roster(
                 id=a.id,
                 mission={"id": a.mission.id, "name": a.mission.name} if a.mission else {"id": None, "name": None},
                 role=a.role.name if a.role else None,
-                soldier_id=a.soldier.id if a.soldier else 0,
+                soldier_id=a.soldier.id if a.soldier else None,
                 soldier_name=a.soldier.name if a.soldier else "",
                 start_at=a.start_at,
                 end_at=a.end_at,
@@ -156,7 +156,7 @@ class DayRosterItem(BaseModel):
     id: int
     mission: dict | None
     role: str | None = None
-    soldier_id: int
+    soldier_id: Optional[int] = None
     soldier_name: str
     start_at: datetime
     end_at: datetime
@@ -214,7 +214,7 @@ def day_roster(
                 id=a.id,
                 mission={"id": a.mission.id, "name": a.mission.name} if a.mission else None,
                 role=a.role.name if a.role else None,
-                soldier_id=a.soldier.id if a.soldier else 0,
+                soldier_id=a.soldier.id if a.soldier else None,
                 soldier_name=a.soldier.name if a.soldier else "",
                 start_at=a.start_at,
                 end_at=a.end_at,
@@ -266,7 +266,7 @@ def reassign_assignment(body: ReassignRequest, db: Session = Depends(get_db)):
         "id": a.id,
         "mission": {"id": a.mission.id, "name": a.mission.name} if a.mission else None,
         "role": a.role.name if a.role else None,
-        "soldier_id": a.soldier.id if a.soldier else 0,
+        "soldier_id": a.soldier_id,
         "soldier_name": a.soldier.name if a.soldier else "",
         "start_at": a.start_at,
         "end_at": a.end_at,
@@ -275,3 +275,63 @@ def reassign_assignment(body: ReassignRequest, db: Session = Depends(get_db)):
         "start_epoch_ms": int(a.start_at.timestamp() * 1000),
         "end_epoch_ms": int(a.end_at.timestamp() * 1000),
     }
+
+class CreateAssignmentRequest(BaseModel):
+    day: str
+    mission_id: int
+    role_id: Optional[int] = None
+    start_time: str   # "HH:MM" or "HH:MM:SS"
+    end_time: str     # "HH:MM" or "HH:MM:SS"
+    soldier_id: Optional[int] = None  # null means create placeholder only if your schema allows
+
+def _with_seconds(x: str) -> str:
+    return x if len(x) >= 8 else (x + ":00")
+
+@router.post("/create")
+def create_assignment(body: CreateAssignmentRequest, db: Session = Depends(get_db)):
+    # compute window in UTC using your existing helper
+    the_day = date.fromisoformat(body.day)
+    start_at, end_at = Assignment.window_for(_with_seconds(body.start_time), _with_seconds(body.end_time), the_day)
+
+    # If your schema requires soldier_id NOT NULL, reject null soldier_id:
+    if body.soldier_id is None:
+        # either 400, or allow if your DB column is nullable
+        # raise HTTPException(status_code=400, detail="soldier_id is required")
+        pass
+
+    a = Assignment(
+        mission_id=body.mission_id,
+        soldier_id=body.soldier_id,
+        role_id=body.role_id,
+        start_at=start_at,
+        end_at=end_at,
+    )
+    db.add(a)
+    db.commit()
+    db.refresh(a)
+
+    s_local = a.start_at.astimezone(LOCAL_TZ).isoformat()
+    e_local = a.end_at.astimezone(LOCAL_TZ).isoformat()
+
+    return {
+        "id": a.id,
+        "mission": {"id": a.mission.id, "name": a.mission.name} if a.mission else None,
+        "role": a.role.name if a.role else None,
+        "soldier_id": a.soldier_id,
+        "soldier_name": a.soldier.name if a.soldier else "",
+        "start_at": a.start_at,
+        "end_at": a.end_at,
+        "start_local": s_local,
+        "end_local": e_local,
+        "start_epoch_ms": int(a.start_at.timestamp() * 1000),
+        "end_epoch_ms": int(a.end_at.timestamp() * 1000),
+    }
+
+@router.delete("/{assignment_id}")
+def delete_assignment(assignment_id: int, db: Session = Depends(get_db)):
+    a = db.get(Assignment, assignment_id)
+    if not a:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+    db.delete(a)
+    db.commit()
+    return {"deleted": assignment_id}
