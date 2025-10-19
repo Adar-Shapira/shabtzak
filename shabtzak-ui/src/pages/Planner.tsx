@@ -145,11 +145,15 @@ export default function Planner() {
   const [warnLoading, setWarnLoading] = useState(false)
   const [warnError, setWarnError] = useState<string | null>(null)
 
+  const [rowsForWarnings, setRowsForWarnings] = useState<FlatRosterItem[]>([]);
+
   const [pendingEmptySlot, setPendingEmptySlot] = useState<null | {
     missionId: number;
     roleId: number | null;      // if you want role-aware empty slots later
     startHHMM: string;          // "HH:MM"
     endHHMM: string;
+    startLocalIso: string;
+    endLocalIso: string;
   }>(null);
 
   const [requirementsByMission, setRequirementsByMission] = useState<
@@ -169,6 +173,17 @@ export default function Planner() {
       return name.includes(q) || roles.includes(q);
     });
   }, [visibleCandidates, candidateSearch]);
+
+  async function loadDayRosterForWarnings(forDay: string) {
+    try {
+      const { data } = await api.get<FlatRosterResp>("/assignments/day-roster", {
+        params: { day: forDay },
+      });
+      setRowsForWarnings(data.items);
+    } catch {
+      setRowsForWarnings([]);
+    }
+  }
 
   async function loadWarnings(forDay: string) {
     try {
@@ -449,40 +464,51 @@ export default function Planner() {
    * based on the current day's rows in memory.
    */
   function computeCandidateWarnings(s: Soldier): string[] {
-    if (!pendingAssignmentId) return [];
+    // Determine the candidate window (ms) for the slot being assigned
+    let candStart: number | null = null;
+    let candEnd: number | null = null;
 
-    // The assignment we’re trying to fill
-    const target = rows.find(r => r.id === pendingAssignmentId);
-    if (!target) return [];
+    if (pendingAssignmentId) {
+      const target = rows.find(r => r.id === pendingAssignmentId);
+      if (!target) return [];
+      candStart = (target as any).start_epoch_ms ?? new Date(target.start_at).getTime();
+      candEnd   = (target as any).end_epoch_ms   ?? new Date(target.end_at).getTime();
+    } else if (pendingEmptySlot) {
+      // Use the local ISO window captured when the empty-slot modal was opened
+      candStart = new Date(pendingEmptySlot.startLocalIso).getTime();
+      candEnd   = new Date(pendingEmptySlot.endLocalIso).getTime();
+    } else {
+      return [];
+    }
 
-    const candStart = (target as any).start_epoch_ms ?? toMs(target.start_at);
-    const candEnd   = (target as any).end_epoch_ms   ?? toMs(target.end_at);
+    // If somehow not set, bail
+    if (candStart == null || candEnd == null) return [];
 
-    // Soldier’s existing assignments for the selected day we’ve already loaded
-    const existing = rows.filter(r => r.soldier_id === s.id);
+    // Use the day-roster set that includes overnight overlaps
+    const existing = rowsForWarnings.filter(r => r.soldier_id === s.id);
 
-    // 1) OVERLAP: if candidate window intersects any existing window
+    // 1) OVERLAP: intersects any existing interval?
     const hasOverlap = existing.some(r => {
-      const sMs = (r as any).start_epoch_ms ?? toMs(r.start_at);
-      const eMs = (r as any).end_epoch_ms   ?? toMs(r.end_at);
-      return candStart < eMs && candEnd > sMs;
+      const sMs = (r as any).start_epoch_ms ?? new Date(r.start_at).getTime();
+      const eMs = (r as any).end_epoch_ms   ?? new Date(r.end_at).getTime();
+      return candStart! < eMs && candEnd! > sMs;
     });
 
-    // 2) REST: include candidate among soldier’s intervals and check adjacent gaps
+    // 2) REST: insert candidate into soldier’s intervals and check adjacent gaps
     const intervals = existing
       .map(r => ({
-        start: (r as any).start_epoch_ms ?? toMs(r.start_at),
-        end:   (r as any).end_epoch_ms   ?? toMs(r.end_at),
+        start: (r as any).start_epoch_ms ?? new Date(r.start_at).getTime(),
+        end:   (r as any).end_epoch_ms   ?? new Date(r.end_at).getTime(),
       }))
       .concat([{ start: candStart, end: candEnd }])
       .sort((a, b) => a.start - b.start);
 
+    const EIGHT_HOURS_MS = 8 * 60 * 60 * 1000;
     let hasRestViolation = false;
     for (let i = 0; i < intervals.length - 1; i++) {
       const a = intervals[i];
       const b = intervals[i + 1];
       const gap = b.start - a.end;
-      // “REST” means non-negative gap but less than 8 hours.
       if (gap >= 0 && gap < EIGHT_HOURS_MS) {
         hasRestViolation = true;
         break;
@@ -541,7 +567,18 @@ export default function Planner() {
     const startHHMM = startLabel.slice(-5);
     const endHHMM   = endLabel.slice(-5);
 
-    setPendingEmptySlot({ missionId, roleId: roleId ?? null, startHHMM, endHHMM });
+    // Build ISO strings in local time for vacation + modal warnings (declare BEFORE using)
+    const startIsoLocal = startLabel.replace(" ", "T") + ":00";
+    const endIsoLocal   = endLabel.replace(" ", "T") + ":00";
+
+    setPendingEmptySlot({
+      missionId,
+      roleId: roleId ?? null,
+      startHHMM,
+      endHHMM,
+      startLocalIso: startIsoLocal,
+      endLocalIso: endIsoLocal,
+    });
 
     setPendingAssignmentId(null);
     setPendingRoleName(roleName ?? null);
@@ -549,10 +586,6 @@ export default function Planner() {
     setChangeError(null);
     setIsChangeOpen(true);
     setCandidateSearch("");
-
-    // Build ISO strings in local time for vacation checks
-    const startIsoLocal = startLabel.replace(" ", "T") + ":00";
-    const endIsoLocal   = endLabel.replace(" ", "T") + ":00";
 
     // Load soldiers and prefilter by role (if provided), then apply vacation/overlap checks
     (async () => {
@@ -847,6 +880,7 @@ export default function Planner() {
 
   useEffect(() => {
     loadAllAssignments();
+    loadDayRosterForWarnings(day);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [day]);
 
