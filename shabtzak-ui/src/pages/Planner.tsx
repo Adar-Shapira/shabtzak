@@ -475,7 +475,7 @@ export default function Planner() {
    * (pendingAssignmentId) would create an OVERLAP or <8h REST issue
    * based on the current day's rows in memory.
    */
-  function computeCandidateWarnings(s: Soldier): string[] {
+  function computeCandidateWarnings(s: Soldier): Array<{ text: string; color: "red" | "orange" }> {
     // Determine the candidate window (ms) for the slot being assigned
     let candStart: number | null = null;
     let candEnd: number | null = null;
@@ -493,7 +493,6 @@ export default function Planner() {
       return [];
     }
 
-    // If somehow not set, bail
     if (candStart == null || candEnd == null) return [];
 
     // Use the day-roster set that includes overnight overlaps
@@ -506,7 +505,7 @@ export default function Planner() {
       return candStart! < eMs && candEnd! > sMs;
     });
 
-    // 2) REST: insert candidate into soldier’s intervals and check adjacent gaps
+    // 2) REST tiers: compute minimum non-negative gap adjacent to the candidate
     const intervals = existing
       .map(r => ({
         start: (r as any).start_epoch_ms ?? new Date(r.start_at).getTime(),
@@ -515,22 +514,113 @@ export default function Planner() {
       .concat([{ start: candStart, end: candEnd }])
       .sort((a, b) => a.start - b.start);
 
-    const EIGHT_HOURS_MS = 8 * 60 * 60 * 1000;
-    let hasRestViolation = false;
+    const H8 = 8 * 60 * 60 * 1000;
+    const H16 = 16 * 60 * 60 * 1000;
+
+    let minPositiveGap = Number.POSITIVE_INFINITY;
     for (let i = 0; i < intervals.length - 1; i++) {
       const a = intervals[i];
       const b = intervals[i + 1];
       const gap = b.start - a.end;
-      if (gap >= 0 && gap < EIGHT_HOURS_MS) {
-        hasRestViolation = true;
-        break;
+      if (gap >= 0 && gap < minPositiveGap) {
+        minPositiveGap = gap;
       }
     }
 
-    const labels: string[] = [];
-    if (hasOverlap) labels.push("OVERLAP WARNING");
-    if (hasRestViolation) labels.push("REST WARNING");
-    return labels;
+    const out: Array<{ text: string; color: "red" | "orange" }> = [];
+
+    if (hasOverlap) {
+      out.push({ text: "OVERLAP", color: "red" });
+    }
+
+    // REST warnings:
+    //   < 8h   => red
+    //   8–16h  => orange
+    if (Number.isFinite(minPositiveGap)) {
+      if (minPositiveGap < H8) {
+        out.push({ text: "REST", color: "red" });
+      } else if (minPositiveGap < H16) {
+        out.push({ text: "REST", color: "orange" });
+      }
+    }
+
+    return out;
+  }
+
+  function restTierForRow(row: FlatRosterItem): "red" | "orange" | null {
+    // Need a soldier and a valid interval
+    if (!row.soldier_id) return null;
+
+    const curStart = (row as any).start_epoch_ms ?? new Date(row.start_at).getTime();
+    const curEnd   = (row as any).end_epoch_ms   ?? new Date(row.end_at).getTime();
+    if (!(Number.isFinite(curStart) && Number.isFinite(curEnd))) return null;
+
+    // Collect all intervals for this soldier on the roster used for warnings
+    const items = rowsForWarnings
+      .filter(r => r.soldier_id === row.soldier_id)
+      .map(r => ({
+        id: r.id,
+        start: (r as any).start_epoch_ms ?? new Date(r.start_at).getTime(),
+        end:   (r as any).end_epoch_ms   ?? new Date(r.end_at).getTime(),
+      }))
+      .filter(it => Number.isFinite(it.start) && Number.isFinite(it.end))
+      .sort((a, b) => a.start - b.start);
+
+    if (items.length === 0) return null;
+
+    // Find this row in that set (prefer ID match; fall back to exact window match)
+    let idx = items.findIndex(it => it.id === row.id);
+    if (idx === -1) {
+      idx = items.findIndex(it => it.start === curStart && it.end === curEnd);
+    }
+    if (idx === -1) {
+      // If we can't pinpoint it, conservatively compute the nearest gaps to this window.
+      // Insert position by start time:
+      let pos = items.findIndex(it => it.start > curStart);
+      if (pos === -1) pos = items.length;
+      const prev = items[pos - 1];
+      const next = items[pos];
+      const H8  = 8 * 60 * 60 * 1000;
+      const H16 = 16 * 60 * 60 * 1000;
+
+      let minGap = Number.POSITIVE_INFINITY;
+      if (prev) {
+        const g = curStart - prev.end;
+        if (g >= 0 && g < minGap) minGap = g;
+      }
+      if (next) {
+        const g = next.start - curEnd;
+        if (g >= 0 && g < minGap) minGap = g;
+      }
+
+      if (!Number.isFinite(minGap)) return null;
+      if (minGap < H8) return "red";
+      if (minGap < H16) return "orange";
+      return null;
+    }
+
+    // Compute gaps with immediate neighbors
+    const cur = items[idx];
+    const prev = items[idx - 1];
+    const next = items[idx + 1];
+
+    const H8  = 8 * 60 * 60 * 1000;
+    const H16 = 16 * 60 * 60 * 1000;
+
+    let minGap = Number.POSITIVE_INFINITY;
+    if (prev) {
+      const g = cur.start - prev.end;
+      if (g >= 0 && g < minGap) minGap = g;
+    }
+    if (next) {
+      const g = next.start - cur.end;
+      if (g >= 0 && g < minGap) minGap = g;
+    }
+
+    if (!Number.isFinite(minGap)) return null;
+    if (minGap < H8) return "red";
+    if (minGap < H16) return "orange";
+    return null;
   }
 
   async function openChangeModal(assignmentId: number, roleName: string | null, missionId: number | null) {
@@ -1107,12 +1197,26 @@ export default function Planner() {
                     <span>
                       {s.name}
                       {s.roles && s.roles.length > 0 ? ` (${s.roles.map(r => r.name).join(", ")})` : ""}
-                      {(() => {
+                                            {(() => {
                         const warns = computeCandidateWarnings(s);
                         if (!warns.length) return null;
                         return (
-                          <span style={{ color: "red", fontWeight: 600, marginLeft: 6 }}>
-                            *{warns.join(", ")}
+                          <span style={{ marginLeft: 6, fontWeight: 600, display: "inline-flex", gap: 6 }}>
+                            {warns.map((w, idx) => (
+                              <span
+                                key={idx}
+                                style={{
+                                  color: w.color === "red" ? "crimson" : "#d97706", // orange-600
+                                  border: "1px solid currentColor",
+                                  borderRadius: 4,
+                                  padding: "1px 6px",
+                                  fontSize: "0.85em",
+                                }}
+                                title={w.text === "REST" ? (w.color === "red" ? "Rest < 8h" : "Rest < 16h") : w.text}
+                              >
+                                {w.text}
+                              </span>
+                            ))}
                           </span>
                         );
                       })()}
@@ -1358,9 +1462,21 @@ export default function Planner() {
                               {idx === 0 && missionCell}
                               {idx === 0 && timeCell}
                               <td className="p-2 border">{r.role ?? ""}</td>
-                              <td className="border">
+                                                            <td className="border">
                                 <div className="flex items-center gap-2">
-                                  <span>{r.soldier_name || <span  style={{ color: "crimson" }}>Unassigned</span>}</span>
+                                  {(() => {
+                                    if (!r.soldier_id || !r.soldier_name) {
+                                      return <span style={{ color: "crimson" }}>Unassigned</span>;
+                                    }
+                                    const tier = restTierForRow(r); // "red" | "orange" | null
+                                    const style =
+                                      tier === "red"
+                                        ? { color: "crimson", fontWeight: 600 }
+                                        : tier === "orange"
+                                        ? { color: "#d97706", fontWeight: 600 } // orange-600
+                                        : undefined;
+                                    return <span style={style}>{r.soldier_name}</span>;
+                                  })()}
                                   <button
                                     type="button"
                                     onClick={() =>

@@ -17,16 +17,34 @@ from app.models.role import Role
 from app.models.soldier import Soldier
 from app.models.soldier_mission_restriction import SoldierMissionRestriction
 
-
 from zoneinfo import ZoneInfo
 import os
 from math import floor
 
 from sqlalchemy.sql import expression as sql
 
+import os
+from datetime import datetime, date, timedelta, timezone
+from zoneinfo import ZoneInfo
+
 
 LOCAL_TZ = ZoneInfo(os.getenv("APP_TZ", "UTC"))
 router = APIRouter(prefix="/assignments", tags=["assignments"])
+
+APP_TZ = os.getenv("APP_TZ", "UTC")
+_LOCAL_TZ = ZoneInfo(APP_TZ)
+
+def _local_midnight_bounds(day_str: str) -> tuple[datetime, datetime]:
+    """
+    Interpret `day_str` (YYYY-MM-DD) in APP_TZ and return (start_utc, end_utc).
+    """
+    try:
+        d = date.fromisoformat(day_str)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid day format, expected YYYY-MM-DD")
+    start_local = datetime(d.year, d.month, d.day, 0, 0, 0, tzinfo=_LOCAL_TZ)
+    end_local = start_local + timedelta(days=1)
+    return start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc)
 
 class RosterItem(BaseModel):
     id: int
@@ -134,23 +152,24 @@ class ClearRequest(BaseModel):
     mission_ids: Optional[List[int]] = None
 
 @router.post("/clear")
-def clear_assignments_for_day(req: ClearRequest, db: Session = Depends(get_db)):
-    # use the same local-day bounds logic as roster
-    start_utc, end_utc = _day_bounds(req.day)
+def clear_plan(payload: dict, db: Session = Depends(get_db)):
+    day = payload.get("day")
+    if not day:
+        raise HTTPException(status_code=400, detail="Missing 'day'")
 
-    stmt = delete(Assignment).where(
-        and_(
-            Assignment.end_at > start_utc,   # overlaps the day
-            Assignment.start_at < end_utc,
-        )
-    )
-    if req.mission_ids:
-        stmt = stmt.where(Assignment.mission_id.in_(req.mission_ids))
+    mission_ids = payload.get("mission_ids") or None
+    day_start_utc, day_end_utc = _local_midnight_bounds(day)
 
-    res = db.execute(stmt)
+    conds = [
+        Assignment.start_at >= day_start_utc,
+        Assignment.start_at <  day_end_utc,
+    ]
+    if mission_ids:
+        conds.append(Assignment.mission_id.in_(mission_ids))
+
+    db.execute(delete(Assignment).where(and_(*conds)))
     db.commit()
-    deleted_count = res.rowcount or 0
-    return {"day": req.day, "deleted": deleted_count}    
+    return {"ok": True} 
 
 class DayRosterItem(BaseModel):
     id: int
