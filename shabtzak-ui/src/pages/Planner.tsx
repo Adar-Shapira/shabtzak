@@ -554,6 +554,9 @@ export default function Planner() {
       const dayISO = day; // YYYY-MM-DD selected in the planner
       const slotStartISO = target.start_local || target.start_at;
       const slotEndISO = target.end_local || target.end_at;
+      // Ensure warnings use the slot's own local day roster (not just the planner's selected day)
+      const slotDayISO = (slotStartISO || "").slice(0, 10);
+      await loadDayRosterForWarnings(slotDayISO);
 
       const allowed: Soldier[] = [];
       for (const s of byRole) {
@@ -598,6 +601,9 @@ export default function Planner() {
     (async () => {
       try {
         const soldiers = await listSoldiers();
+        // Ensure warnings use the slot's own local day roster
+        const slotDayISO = (startIsoLocal || "").slice(0, 10);
+        await loadDayRosterForWarnings(slotDayISO);
 
         // 1) Decide the role to filter by
         let finalRoleId: number | null = roleId ?? null;
