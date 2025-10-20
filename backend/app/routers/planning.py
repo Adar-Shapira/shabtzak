@@ -88,8 +88,8 @@ def _vacation_blocks_for_day(db: Session, the_day: date) -> Dict[int, List[tuple
                 (block_start_local.astimezone(timezone.utc), block_end_local.astimezone(timezone.utc))
             )
         elif v.start_date == the_day == v.end_date:
-            # Single-day vacation → treat as fully blocked (00–24)
-            block_start_local = day_start_local
+            # Single-day vacation → block only from 14:00 local to end-of-day
+            block_start_local = day_start_local.replace(hour=14, minute=0, second=0, microsecond=0)
             block_end_local = day_end_local
             blocks.setdefault(s_id, []).append(
                 (block_start_local.astimezone(timezone.utc), block_end_local.astimezone(timezone.utc))

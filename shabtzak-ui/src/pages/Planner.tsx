@@ -541,7 +541,9 @@ export default function Planner() {
 
     try {
       const soldiers = await listSoldiers();
-      const byRole = roleName ? soldiers.filter(s => (s.roles || []).some(r => r.name === roleName)) : soldiers;
+      const byRole = roleName
+        ? soldiers.filter(s => (s.roles || []).some(r => r.name === roleName))
+        : soldiers;
 
       const target = rows.find(r => r.id === assignmentId);
       if (!target) {
@@ -555,9 +557,10 @@ export default function Planner() {
 
       const allowed: Soldier[] = [];
       for (const s of byRole) {
-        const ok = await isSoldierAllowedForSlot(s.id, dayISO, slotStartISO, slotEndISO);
+        const ok = await isSoldierAllowedForSlot(s.id, slotStartISO, slotEndISO);
         if (ok) allowed.push(s);
       }
+
       setVisibleCandidates(allowed);
     } catch {
       setChangeError("Failed to load soldiers");
@@ -625,7 +628,7 @@ export default function Planner() {
         // 3) Then apply vacation/overlap checks (same as Unassigned path)
         const allowed: Soldier[] = [];
         for (const s of roleFiltered) {
-          const ok = await isSoldierAllowedForSlot(s.id, day, startIsoLocal, endIsoLocal);
+          const ok = await isSoldierAllowedForSlot(s.id, startIsoLocal, endIsoLocal);
           if (ok) allowed.push(s);
         }
 
@@ -712,55 +715,69 @@ export default function Planner() {
 
   async function isSoldierAllowedForSlot(
     soldierId: number,
-    dayISO: string,
     slotStartISO: string,
     slotEndISO: string
   ): Promise<boolean> {
     const vacs = await ensureVacations(soldierId);
-    const blocks = buildVacationBlocksForDayLocal(vacs, dayISO);
-    if (blocks.length === 0) return true;
 
-    const slotStartLocal = new Date(slotStartISO);
-    const slotEndLocal = new Date(slotEndISO);
-    for (const [bs, be] of blocks) {
-      if (overlapsLocal(slotStartLocal, slotEndLocal, bs, be)) return false;
+    // Derive the slot's local day (YYYY-MM-DD) and HH:MM parts directly from the ISO-ish strings we build.
+    const slotDayISO = (slotStartISO || "").slice(0, 10);
+    const startHM = (slotStartISO || "").slice(11, 16); // "HH:MM"
+    const endHM   = (slotEndISO   || "").slice(11, 16); // "HH:MM"
+
+    // Convert "HH:MM" to minutes from midnight
+    const toMin = (hm: string) => {
+      const [h, m] = hm.split(":").map(Number);
+      return (h || 0) * 60 + (m || 0);
+    };
+
+    const startMin = toMin(startHM);
+    let endMin = toMin(endHM);
+    // Normalize overnight slot by extending past 24:00
+    if (endMin <= startMin) endMin += 24 * 60;
+
+    // Build vacation blocks (in minutes from midnight) for THIS slot's local day only
+    const vacBlocks = buildVacationBlocksForDayMins(vacs, slotDayISO);
+    if (vacBlocks.length === 0) return true;
+
+    // Overlap test in minutes
+    for (const [bStart, bEnd] of vacBlocks) {
+      // Note: blocks are within [0,1440) on that day; our slot may extend to <2880
+      const overlap = (startMin < bEnd) && (endMin > bStart);
+      if (overlap) return false;
     }
     return true;
   }
 
-  function buildVacationBlocksForDayLocal(vacs: Vacation[], dayISO: string): Array<[Date, Date]> {
-    const blocks: Array<[Date, Date]> = [];
-    const dayStart = new Date(`${dayISO}T00:00:00`);
-    const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
+  function buildVacationBlocksForDayMins(vacs: Vacation[], dayISO: string): Array<[number, number]> {
+    const MIN_14 = 14 * 60;         // 14:00 in minutes
+    const MIN_24 = 24 * 60;         // 24:00 in minutes
 
+    const blocks: Array<[number, number]> = [];
     for (const v of vacs) {
-      const sd = v.start_date;
-      const ed = v.end_date;
+      const sd = v.start_date;  // "YYYY-MM-DD"
+      const ed = v.end_date;    // "YYYY-MM-DD"
 
-      const startLt = new Date(`${sd}T00:00:00`);
-
-      const isMiddleDay = startLt < dayStart && new Date(`${ed}T00:00:00`) > dayStart;
-      const isStartDay = sd === dayISO && ed !== dayISO;
-      const isEndDay = ed === dayISO && sd !== dayISO;
+      const isMiddleDay = sd < dayISO && ed > dayISO;
+      const isStartDay  = sd === dayISO && ed !== dayISO;
+      const isEndDay    = ed === dayISO && sd !== dayISO;
       const isSingleDay = sd === dayISO && ed === dayISO;
 
-      if (isMiddleDay || isSingleDay) {
-        blocks.push([dayStart, dayEnd]);
+      if (isMiddleDay) {
+        // Entire day blocked
+        blocks.push([0, MIN_24]);
       } else if (isStartDay) {
-        const start14 = new Date(dayStart);
-        start14.setHours(14, 0, 0, 0);
-        blocks.push([start14, dayEnd]);
+        // Leaving day: blocked from 14:00 to 24:00
+        blocks.push([MIN_14, MIN_24]);
       } else if (isEndDay) {
-        const end14 = new Date(dayStart);
-        end14.setHours(14, 0, 0, 0);
-        blocks.push([dayStart, end14]);
+        // Return day: blocked from 00:00 to 14:00
+        blocks.push([0, MIN_14]);
+      } else if (isSingleDay) {
+        // Single-day vacation: treat as leave day (available until 14:00, blocked after)
+        blocks.push([MIN_14, MIN_24]);
       }
     }
     return blocks;
-  }
-
-  function overlapsLocal(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date): boolean {
-    return bStart < aEnd && bEnd > aStart;
   }
 
   const sortedRows = useMemo(() => {
@@ -1011,8 +1028,7 @@ export default function Planner() {
                   <th className="border p-2 text-left">Type</th>
                   <th className="border p-2 text-left">Soldier</th>
                   <th className="border p-2 text-left">Mission</th>
-                  <th className="border p-2 text-left">Start</th>
-                  <th className="border p-2 text-left">End</th>
+                  <th className="border p-2 text-left">Time Slot</th>
                   <th className="border p-2 text-left">Details</th>
                 </tr>
               </thead>
@@ -1020,10 +1036,9 @@ export default function Planner() {
                 {warnings.map((w, i) => (
                   <tr key={i}>
                     <td className="border p-2">{w.type}</td>
-                    <td className="border p-2">{w.soldier_name} (#{w.soldier_id})</td>
-                    <td className="border p-2">{w.mission_name} (#{w.mission_id})</td>
-                    <td className="border p-2">{w.start_at}</td>
-                    <td className="border p-2">{w.end_at}</td>
+                    <td className="border p-2">{w.soldier_name}</td>
+                    <td className="border p-2">{w.mission_name}</td>
+                    <td className="border p-2">{w.start_at} → {w.end_at}</td>
                     <td className="border p-2">{w.details || ""}</td>
                   </tr>
                 ))}
