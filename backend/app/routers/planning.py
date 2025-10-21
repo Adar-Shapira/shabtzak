@@ -18,9 +18,9 @@ from app.models.soldier import Soldier
 from app.models.soldier_mission_restriction import SoldierMissionRestriction
 from app.models.vacation import Vacation
 
-
 import os
 from zoneinfo import ZoneInfo
+import random
 
 LOCAL_TZ = ZoneInfo(os.getenv("APP_TZ", "UTC"))
 router = APIRouter(prefix="/plan", tags=["planning"])
@@ -29,6 +29,8 @@ class FillRequest(BaseModel):
     day: str = Field(..., description="YYYY-MM-DD")
     mission_ids: Optional[List[int]] = None
     replace: bool = False  # if true, clear existing assignments for these missions/day before filling
+    shuffle: bool = False  # NEW: randomize pools / RR cursors to generate a different (still valid) plan
+    random_seed: Optional[int] = None  # NEW: deterministic shuffle if provided
 
 class PlanResultItem(BaseModel):
     mission: dict
@@ -443,6 +445,13 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
     stats_by_soldier = _build_soldier_stats(recent_assignments, day_start, day_end)
     pair_counts = _build_pair_counts(recent_assignments)
 
+    # Optional shuffle: produce a different yet valid plan
+    rng = random.Random(req.random_seed) if req.random_seed is not None else random.Random()
+    if req.shuffle:
+        # Shuffle per-role pools and generic pool in-place (copy-safe as they are lists we own)
+        for role_id, lst in ctx["soldiers_by_role"].items():
+            rng.shuffle(lst)
+        rng.shuffle(ctx["all_soldiers"])
 
     # Exact-window duplicates that already exist today
     existing_same_window: set[tuple[int, datetime, datetime]] = set(
@@ -476,6 +485,12 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
 
     results: List[PlanResultItem] = []
     rr_index: Dict[Optional[int], int] = {}  # role_id or None
+
+    if req.shuffle:
+        # Pre-seed per-role cursors and the generic cursor with random offsets
+        for role_id in ctx["soldiers_by_role"].keys():
+            rr_index[role_id] = rng.randrange(0, 1000)
+        rr_index[None] = rng.randrange(0, 1000)
 
     # One-shot clear (so in-memory lookups reflect the actual DB state)
     if req.replace:

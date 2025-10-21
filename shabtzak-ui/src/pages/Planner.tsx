@@ -57,10 +57,12 @@ function humanError(e: any, fallback: string) {
 
 const APP_TZ = (import.meta as any)?.env?.VITE_APP_TZ || "UTC";
 
-// ADD THIS just below APP_TZ
-async function fillPlanForDay(forDay: string, replace = false) {
-  // POST /plan/fill to trigger server-side planning
-  await api.post("/plan/fill", { day: forDay, replace });
+async function fillPlanForDay(
+  forDay: string,
+  replace = false,
+  opts?: { shuffle?: boolean; random_seed?: number }
+) {
+  await api.post("/plan/fill", { day: forDay, replace, ...(opts || {}) });
 }
 
 // Format to "YYYY-MM-DD HH:mm" in a specific TZ using Intl parts
@@ -286,6 +288,26 @@ async function runPlanner() {
     await loadDayRosterForWarnings(day); // keep rowsForWarnings fresh
   } catch (e: any) {
     alert(humanError(e, "Planner failed"));
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function shufflePlanner() {
+  setBusy(true);
+  try {
+    // Replace the current plan and ask backend to shuffle pools and RR cursors
+    await fillPlanForDay(day, /* replace */ true, {
+      shuffle: true,
+      random_seed: Date.now(),
+    });
+
+    // Refresh UI & warning datasets
+    await loadAllAssignments();
+    await loadWarnings(day);
+    await loadDayRosterForWarnings(day);
+  } catch (e: any) {
+    alert(humanError(e, "Shuffle failed"));
   } finally {
     setBusy(false);
   }
@@ -1228,6 +1250,13 @@ async function runPlanner() {
           className="border rounded px-3 py-1 hover:bg-gray-50 disabled:opacity-50"
         >
           {busy ? "Planning…" : "Fill plan for day"}
+        </button>
+        <button
+          onClick={shufflePlanner}
+          disabled={busy}
+          className="border rounded px-3 py-1 hover:bg-gray-50 disabled:opacity-50"
+        >
+          {busy ? "Shuffling…" : "Shuffle Plan"}
         </button>
         <button
           onClick={deletePlanForDay}
