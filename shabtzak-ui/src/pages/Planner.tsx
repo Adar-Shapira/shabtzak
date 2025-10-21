@@ -20,18 +20,6 @@ import { getPlannerWarnings, type PlannerWarning } from "../api"
 import { listSoldierVacations, type Vacation } from "../api";
 
 
-
-type PlanResultItem = {
-  mission: { id: number; name: string };
-  created_count?: number | null;
-  error?: string | null;
-};
-
-type PlanFillResponse = {
-  day: string;
-  results: PlanResultItem[];
-};
-
 type FlatRosterItem = {
   id: number;
   mission: { id: number | null; name: string | null } | null;
@@ -161,7 +149,6 @@ export default function Planner() {
   const [day, setDay] = useState<string>(today);
 
   const [busy, setBusy] = useState(false);
-  const [results, setResults] = useState<PlanResultItem[] | null>(null);
 
   const [listBusy, setListBusy] = useState(false);
   const [rows, setRows] = useState<FlatRosterItem[]>([]);
@@ -180,6 +167,15 @@ export default function Planner() {
   const [warnError, setWarnError] = useState<string | null>(null)
 
   const [rowsForWarnings, setRowsForWarnings] = useState<FlatRosterItem[]>([]);
+
+  // Available Soldiers modal state
+  const [isAvailOpen, setIsAvailOpen] = useState(false);
+  const [availLoading, setAvailLoading] = useState(false);
+  const [availError, setAvailError] = useState<string | null>(null);
+  const [availSoldiers, setAvailSoldiers] = useState<Soldier[]>([]);
+  const [vacationSoldiers, setVacationSoldiers] = useState<
+    { soldier: Soldier; leavingToday: boolean; returningToday: boolean }[]
+  >([]);
 
   const [pendingEmptySlot, setPendingEmptySlot] = useState<null | {
     missionId: number;
@@ -243,10 +239,7 @@ export default function Planner() {
 
   async function runPlanner() {
     setBusy(true);
-    setResults(null);
     try {
-      const { data } = await api.post<PlanFillResponse>("/plan/fill", { day, replace: true });
-      setResults(data.results);
       await loadAllAssignments();
       await loadWarnings(day);
     } catch (e: any) {
@@ -445,7 +438,6 @@ export default function Planner() {
     setBusy(true);
     try {
       await clearPlan(day);
-      setResults(null);
       await loadAllAssignments();
       await loadWarnings(day);
     } catch (e: any) {
@@ -623,7 +615,7 @@ export default function Planner() {
     return null;
   }
 
-  async function openChangeModal(assignmentId: number, roleName: string | null, missionId: number | null) {
+  async function openChangeModal(assignmentId: number, roleName: string | null) {
     setPendingAssignmentId(assignmentId);
     setChangeError(null);
     setIsChangeOpen(true);
@@ -641,7 +633,6 @@ export default function Planner() {
         return;
       }
 
-      const dayISO = day; // YYYY-MM-DD selected in the planner
       const slotStartISO = target.start_local || target.start_at;
       const slotEndISO = target.end_local || target.end_at;
       // Ensure warnings use the slot's own local day roster (not just the planner's selected day)
@@ -807,6 +798,112 @@ export default function Planner() {
     const data = await listSoldierVacations(soldierId);
     vacationsCache.set(soldierId, data);
     return data;
+  }
+
+  async function openAvailableModal() {
+    setIsAvailOpen(true);
+    setAvailLoading(true);
+    setAvailError(null);
+
+    try {
+      // 1) Get all soldiers
+      const soldiers = await listSoldiers();
+
+      // 2) Make sure we have vacations cached for all soldiers
+      await Promise.all(
+        soldiers.map(async (s) => {
+          if (!vacationsCache.has(s.id)) {
+            const data = await listSoldierVacations(s.id);
+            vacationsCache.set(s.id, data);
+          }
+        })
+      );
+
+      // 4) Split into available vs. on-vacation for the selected day
+      const dayISO = day; // "YYYY-MM-DD"
+      const available: Soldier[] = [];
+      const onVacation: { soldier: Soldier; leavingToday: boolean; returningToday: boolean }[] = [];
+
+      function isInRange(d: string, start: string, end: string): boolean {
+        return d >= start && d <= end; // inclusive
+      }
+
+      for (const s of soldiers) {
+        const vacs = vacationsCache.get(s.id) || [];
+        const vacToday = vacs.find(v => isInRange(dayISO, v.start_date, v.end_date));
+
+        if (!vacToday) {
+          available.push(s);
+        } else {
+          const leavingToday = vacToday.start_date === dayISO;
+          const returningToday = vacToday.end_date === dayISO;
+
+          // Soldiers who leave today or return today are considered AVAILABLE.
+          if (leavingToday || returningToday) {
+            // Attach markers so we can show a note in the Available list.
+            // We’ll keep a parallel map so we don’t mutate Soldier type.
+            (available as any)._markers = (available as any)._markers || new Map<number, { leavingToday: boolean; returningToday: boolean }>();
+            (available as any)._markers.set(s.id, { leavingToday, returningToday });
+            available.push(s);
+          } else {
+            onVacation.push({ soldier: s, leavingToday, returningToday });
+          }
+        }
+      }
+
+      // 5) Save to state
+      // (we also keep assignedToday as a Set, but we’ll recompute inside render from rowsForWarnings)
+      setAvailSoldiers(available);
+      setVacationSoldiers(onVacation);
+    } catch (e: any) {
+      setAvailError(e?.response?.data?.detail ?? "Failed to load availability");
+    } finally {
+      setAvailLoading(false);
+    }
+  }
+
+  // Compute color for an available soldier using the same logic as the table,
+  // based purely on today's roster intervals in rowsForWarnings.
+  function colorForAvailableSoldier(soldierId: number, assignedToday: boolean): string | undefined {
+    if (!assignedToday) return undefined;
+
+    // Build and sort this soldier's intervals for the selected day
+    const items = rowsForWarnings
+      .filter(r => r.soldier_id === soldierId)
+      .map(r => ({
+        start: (r as any).start_epoch_ms ?? new Date(r.start_at).getTime(),
+        end:   (r as any).end_epoch_ms   ?? new Date(r.end_at).getTime(),
+      }))
+      .filter(it => Number.isFinite(it.start) && Number.isFinite(it.end))
+      .sort((a, b) => a.start - b.start);
+
+    if (items.length === 0) return undefined;
+
+    const H8  = 8 * 60 * 60 * 1000;
+    const H16 = 16 * 60 * 60 * 1000;
+
+    // Detect any overlap among existing intervals → RED
+    for (let i = 0; i < items.length - 1; i++) {
+      const a = items[i];
+      const b = items[i + 1];
+      if (b.start < a.end) {
+        return "#b91c1c"; // red-700
+      }
+    }
+
+    // Compute smallest non-negative gap between adjacent intervals
+    let minGap = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < items.length - 1; i++) {
+      const a = items[i];
+      const b = items[i + 1];
+      const gap = b.start - a.end;
+      if (gap >= 0 && gap < minGap) minGap = gap;
+    }
+
+    if (!Number.isFinite(minGap)) return undefined;
+    if (minGap < H8) return "#b91c1c";        // red
+    if (minGap <= H16) return "#b45309";      // orange-700
+    return undefined;
   }
 
   async function isSoldierAllowedForSlot(
@@ -1085,6 +1182,14 @@ export default function Planner() {
         >
           {busy ? "Working…" : "Export csv"}
         </button>
+                <button
+          onClick={openAvailableModal}
+          disabled={busy || listBusy}
+          className="border rounded px-3 py-1 hover:bg-gray-50 disabled:opacity-50"
+          style={{ marginLeft: 8 }}
+        >
+          Available Soldiers
+        </button>
       </div>
 
       {/*results && (
@@ -1108,6 +1213,122 @@ export default function Planner() {
           </div>
         </div>
       )*/}
+
+            <Modal
+        open={isAvailOpen}
+        onClose={() => setIsAvailOpen(false)}
+        title={`Available Soldiers — ${day}`}
+      >
+        {availLoading && <div>Loading…</div>}
+        {!availLoading && availError && (
+          <div style={{ color: "crimson", marginBottom: 8 }}>{availError}</div>
+        )}
+        {!availLoading && !availError && (
+          <div style={{ maxHeight: 480, overflowY: "auto" }}>
+            {/* Build assigned-today set from rowsForWarnings */}
+            {(() => {
+              const assignedToday = new Set(
+                rowsForWarnings
+                  .filter(r => r.soldier_id != null)
+                  .map(r => r.soldier_id as number)
+              );
+
+              return (
+                <>
+                  <h3 className="text-lg font-semibold" style={{ marginBottom: 8 }}>
+                    Available on {day} ({availSoldiers.length})
+                  </h3>
+                  {availSoldiers.length === 0 ? (
+                    <div className="text-gray-500" style={{ marginBottom: 12 }}>
+                      No available soldiers for this date.
+                    </div>
+                  ) : (
+                    <ul style={{ marginBottom: 16 }}>
+                      {availSoldiers.map((s) => {
+                        const assigned = assignedToday.has(s.id);
+                        return (
+                          <li
+                            key={s.id}
+                            style={{
+                              display: "flex",
+                              gap: 8,
+                              alignItems: "center",
+                              padding: "6px 0",
+                              borderBottom: "1px solid #eee",
+                              color: colorForAvailableSoldier(s.id, assigned),
+                            }}
+                          >
+                            <span style={{ minWidth: 18, textAlign: "center" }}>
+                              {assigned ? "✓" : ""}
+                            </span>
+                            <span style={{ display: "flex", flexDirection: "column" }}>
+                              <span>
+                                {s.name}
+                                {s.roles && s.roles.length > 0
+                                  ? ` (${s.roles.map(r => r.name).join(", ")})`
+                                  : ""}
+                              </span>
+                              {(() => {
+                                const markers = (availSoldiers as any)._markers as Map<number, { leavingToday: boolean; returningToday: boolean }> | undefined;
+                                const mark = markers?.get(s.id);
+                                if (!mark) return null;
+                                return (
+                                  <span style={{ fontSize: 12, color: "#555" }}>
+                                    {mark.leavingToday && "Leaving for vacation today"}
+                                    {mark.leavingToday && mark.returningToday ? " · " : ""}
+                                    {mark.returningToday && "Returning from vacation today"}
+                                  </span>
+                                );
+                              })()}
+                            </span>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+
+                  <h3 className="text-lg font-semibold" style={{ marginBottom: 8 }}>
+                    On vacation on {day} ({vacationSoldiers.length})
+                  </h3>
+
+                  {vacationSoldiers.length === 0 ? (
+                    <div className="text-gray-500">No soldiers on vacation this date.</div>
+                  ) : (
+                    <ul>
+                      {vacationSoldiers.map(({ soldier, leavingToday, returningToday }) => (
+                        <li
+                          key={soldier.id}
+                          style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: 2,
+                            padding: "6px 0",
+                            borderBottom: "1px solid #eee",
+                          }}
+                        >
+                          <div>
+                            {soldier.name}
+                            {soldier.roles && soldier.roles.length > 0
+                              ? ` (${soldier.roles.map(r => r.name).join(", ")})`
+                              : ""}
+                          </div>
+                          {(leavingToday || returningToday) && (
+                            <div style={{ fontSize: 12, color: "#555" }}>
+                              {leavingToday && "Leaving for vacation today"}
+                              {leavingToday && returningToday ? " · " : ""}
+                              {returningToday && "Returning from vacation today"}
+                            </div>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </>
+              );
+            })()}
+          </div>
+        )}
+      </Modal>
 
       <section style={{ marginTop: 16, marginBottom: 16 }}>
         <h2 style={{ marginBottom: 8 }}>Warnings</h2>
@@ -1480,7 +1701,7 @@ export default function Planner() {
                                   <button
                                     type="button"
                                     onClick={() =>
-                                      openChangeModal(r.id, r.role, r.mission?.id || null)
+                                      openChangeModal(r.id, r.role)
                                     }
                                     className="border rounded px-2 py-1"
                                   >
