@@ -57,6 +57,12 @@ function humanError(e: any, fallback: string) {
 
 const APP_TZ = (import.meta as any)?.env?.VITE_APP_TZ || "UTC";
 
+// ADD THIS just below APP_TZ
+async function fillPlanForDay(forDay: string, replace = false) {
+  // POST /plan/fill to trigger server-side planning
+  await api.post("/plan/fill", { day: forDay, replace });
+}
+
 // Format to "YYYY-MM-DD HH:mm" in a specific TZ using Intl parts
 function formatYMDHM(dtIso: string, fallbackTz: string) {
   try {
@@ -217,11 +223,30 @@ export default function Planner() {
   }, [visibleCandidates, candidateSearch]);
 
   async function loadDayRosterForWarnings(forDay: string) {
+    // Build YYYY-MM-DD for (day-1), day, (day+1) without relying on shiftDay’s position
+    function addDays(iso: string, delta: number): string {
+      const [y, m, d] = iso.split("-").map(Number);
+      const dt = new Date(Date.UTC(y, (m || 1) - 1, d || 1));
+      dt.setUTCDate(dt.getUTCDate() + delta);
+      const yy = dt.getUTCFullYear();
+      const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+      const dd = String(dt.getUTCDate()).padStart(2, "0");
+      return `${yy}-${mm}-${dd}`;
+    }
+
+    const days = [addDays(forDay, -1), forDay, addDays(forDay, 1)];
+
     try {
-      const { data } = await api.get<FlatRosterResp>("/assignments/day-roster", {
-        params: { day: forDay },
-      });
-      setRowsForWarnings(data.items);
+      const all: FlatRosterItem[] = [];
+      for (const d of days) {
+        const { data } = await api.get<FlatRosterResp>("/assignments/day-roster", {
+          params: { day: d },
+        });
+        if (Array.isArray(data?.items)) {
+          all.push(...data.items);
+        }
+      }
+      setRowsForWarnings(all);
     } catch {
       setRowsForWarnings([]);
     }
@@ -249,17 +274,22 @@ export default function Planner() {
 
 
 
-  async function runPlanner() {
-    setBusy(true);
-    try {
-      await loadAllAssignments();
-      await loadWarnings(day);
-    } catch (e: any) {
-      alert(humanError(e, "Planner failed"));
-    } finally {
-      setBusy(false);
-    }
+async function runPlanner() {
+  setBusy(true);
+  try {
+    // 1) Ask the backend to fill the plan for the selected day
+    await fillPlanForDay(day, /* replace */ false);
+
+    // 2) Refresh the UI
+    await loadAllAssignments();
+    await loadWarnings(day);
+    await loadDayRosterForWarnings(day); // keep rowsForWarnings fresh
+  } catch (e: any) {
+    alert(humanError(e, "Planner failed"));
+  } finally {
+    setBusy(false);
   }
+}
 
     // return YYYY-MM-DD offset by n days from a base YYYY-MM-DD
   function shiftDay(baseISO: string, days: number): string {
@@ -452,6 +482,7 @@ export default function Planner() {
       await clearPlan(day);
       await loadAllAssignments();
       await loadWarnings(day);
+      await loadDayRosterForWarnings(day);
     } catch (e: any) {
       alert(humanError(e, "Failed to delete plan for the day"));
     } finally {
@@ -766,6 +797,7 @@ export default function Planner() {
 
       // IMPORTANT: refresh warnings for the currently selected day
       await loadWarnings(day);
+      await loadDayRosterForWarnings(day);
 
       setIsChangeOpen(false);
       setPendingAssignmentId(null);
@@ -795,6 +827,7 @@ export default function Planner() {
 
       await loadAllAssignments();
       await loadWarnings(day);
+      await loadDayRosterForWarnings(day);
 
       setIsChangeOpen(false);
       setPendingAssignmentId(null);
@@ -818,6 +851,9 @@ export default function Planner() {
     setAvailError(null);
 
     try {
+      // Make sure the warnings roster is up-to-date for the selected day
+      await loadDayRosterForWarnings(day);
+
       // 1) Get all soldiers
       const soldiers = await listSoldiers();
 
@@ -874,14 +910,25 @@ export default function Planner() {
     }
   }
 
-  // Compute color for an available soldier using the same logic as the table,
-  // based purely on today's roster intervals in rowsForWarnings.
-  function colorForAvailableSoldier(soldierId: number, assignedToday: boolean): string | undefined {
-    if (!assignedToday) return undefined;
+  // Compute [start,end) UTC ms window for a day ISO ("YYYY-MM-DD")
+  function dayBoundsMs(dayISO: string): { start: number; end: number } {
+    const start = new Date(`${dayISO}T00:00:00Z`).getTime();
+    return { start, end: start + 24 * 60 * 60 * 1000 };
+  }
 
-    // Build and sort this soldier's intervals for the selected day
+  // Worst warning tier ("red" | "orange" | null) for a soldier across ALL of their rows
+  // that overlap the selected day window, using the same neighbor-gap logic as the table.
+  function restTierForSoldier(dayISO: string, soldierId: number): "red" | "orange" | null {
+    const { start: dayStart, end: dayEnd } = dayBoundsMs(dayISO);
+
+    // Take only intervals that overlap the selected day (but rowsForWarnings contains prev/day/next).
     const items = rowsForWarnings
       .filter(r => r.soldier_id === soldierId)
+      .filter(r => {
+        const s = (r as any).start_epoch_ms ?? new Date(r.start_at).getTime();
+        const e = (r as any).end_epoch_ms   ?? new Date(r.end_at).getTime();
+        return s < dayEnd && e > dayStart; // overlaps the day window
+      })
       .map(r => ({
         start: (r as any).start_epoch_ms ?? new Date(r.start_at).getTime(),
         end:   (r as any).end_epoch_ms   ?? new Date(r.end_at).getTime(),
@@ -889,32 +936,36 @@ export default function Planner() {
       .filter(it => Number.isFinite(it.start) && Number.isFinite(it.end))
       .sort((a, b) => a.start - b.start);
 
-    if (items.length === 0) return undefined;
+    if (items.length === 0) return null;
 
     const H8  = 8 * 60 * 60 * 1000;
     const H16 = 16 * 60 * 60 * 1000;
 
-    // Detect any overlap among existing intervals → RED
+    // Any overlap anywhere → red
     for (let i = 0; i < items.length - 1; i++) {
-      const a = items[i];
-      const b = items[i + 1];
-      if (b.start < a.end) {
-        return "#b91c1c"; // red-700
-      }
+      if (items[i + 1].start < items[i].end) return "red";
     }
 
-    // Compute smallest non-negative gap between adjacent intervals
+    // Min non-negative gap between neighboring intervals
     let minGap = Number.POSITIVE_INFINITY;
     for (let i = 0; i < items.length - 1; i++) {
-      const a = items[i];
-      const b = items[i + 1];
-      const gap = b.start - a.end;
+      const gap = items[i + 1].start - items[i].end;
       if (gap >= 0 && gap < minGap) minGap = gap;
     }
 
-    if (!Number.isFinite(minGap)) return undefined;
-    if (minGap < H8) return "#b91c1c";        // red
-    if (minGap <= H16) return "#b45309";      // orange-700
+    if (!Number.isFinite(minGap)) return null;
+    if (minGap < H8)  return "red";
+    if (minGap < H16) return "orange";
+    return null;
+  }
+
+  // Compute color for an available soldier using the same logic as the table,
+  // based purely on today's roster intervals in rowsForWarnings.
+  function colorForAvailableSoldier(soldierId: number, assignedToday: boolean): string | undefined {
+    //if (!assignedToday) return undefined;
+    //const tier = restTierForSoldier(day, soldierId);
+    //if (tier === "red")    return "#b91c1c"; // red-700
+    //if (tier === "orange") return "#b45309"; // orange-700
     return undefined;
   }
 
@@ -1239,9 +1290,15 @@ export default function Planner() {
           <div style={{ maxHeight: 480, overflowY: "auto" }}>
             {/* Build assigned-today set from rowsForWarnings */}
             {(() => {
+              const { start: dayStart, end: dayEnd } = dayBoundsMs(day);
               const assignedToday = new Set(
                 rowsForWarnings
                   .filter(r => r.soldier_id != null)
+                  .filter(r => {
+                    const s = (r as any).start_epoch_ms ?? new Date(r.start_at).getTime();
+                    const e = (r as any).end_epoch_ms   ?? new Date(r.end_at).getTime();
+                    return s < dayEnd && e > dayStart; // overlaps selected day
+                  })
                   .map(r => r.soldier_id as number)
               );
 
@@ -1267,7 +1324,6 @@ export default function Planner() {
                               alignItems: "center",
                               padding: "6px 0",
                               borderBottom: "1px solid #eee",
-                              color: colorForAvailableSoldier(s.id, assigned),
                             }}
                           >
                             <span style={{ minWidth: 18, textAlign: "center" }}>

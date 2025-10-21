@@ -54,6 +54,15 @@ def _day_bounds(d: date) -> tuple[datetime, datetime]:
     end_local = start_local + timedelta(days=1)
     return start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc)
 
+def _slot_bucket(dt: datetime) -> str:
+    """Return a coarse time-slot bucket in LOCAL_TZ based on start time."""
+    h = dt.astimezone(LOCAL_TZ).hour
+    if 6 <= h < 14:
+        return "MORNING"
+    if 14 <= h < 22:
+        return "EVENING"
+    return "NIGHT"
+
 def _vacation_blocks_for_day(db: Session, the_day: date) -> Dict[int, List[tuple[datetime, datetime]]]:
     """
     Build, in LOCAL_TZ, the 'blocked' time windows for each soldier on `the_day`,
@@ -150,12 +159,15 @@ EIGHT_HOURS = timedelta(hours=8)
 # We minimize this score (lower = more preferred).
 # Tweak weights to taste; all are >= 0.
 WEIGHTS = {
-    "recent_gap_penalty_per_hour_missing": 2.0,    # penalty per hour when rest gap < 8h
-    "same_mission_recent_penalty": 5.0,            # flat penalty if soldier did this mission in the lookback window
-    "mission_repeat_count_penalty": 1.0,           # per-count penalty for how many times soldier did this mission in window
-    "today_assignment_count_penalty": 2.0,         # per assignment already today
-    "total_hours_window_penalty_per_hour": 0.05,   # mild penalty per worked hour in lookback window
-    "recent_gap_boost_per_hour": -0.1,             # small negative penalty (boost) per hour of rest beyond 8h
+    "recent_gap_penalty_per_hour_missing": 2.0,    # keep: strong penalty if < 8h
+    "same_mission_recent_penalty": 5.0,
+    "mission_repeat_count_penalty": 1.0,
+    "today_assignment_count_penalty": 3.0,         # was 2.0 → nudge away from double-dipping today
+    "total_hours_window_penalty_per_hour": 0.08,   # was 0.05 → favor those who worked fewer hours recently
+    "recent_gap_boost_per_hour": -0.4,             # was -0.1 → stronger reward per hour beyond 8h
+
+    "slot_repeat_count_penalty": 0.75,
+    "coassignment_repeat_penalty": 0.5,
 }
 
 class SoldierStats:
@@ -165,6 +177,7 @@ class SoldierStats:
         "total_hours_window",      # float hours
         "mission_count",           # Dict[int, int]
         "recent_missions",         # set[int]
+        "slot_bucket_count",       # Dict[str, int]  # NEW
     )
     def __init__(self):
         self.last_end_at = None
@@ -172,6 +185,7 @@ class SoldierStats:
         self.total_hours_window = 0.0
         self.mission_count = {}
         self.recent_missions = set()
+        self.slot_bucket_count = {}  # NEW
 
 def _fetch_recent_assignments(db: Session, day_start: datetime, day_end: datetime) -> List[Assignment]:
     window_start = day_start - timedelta(days=FAIRNESS_WINDOW_DAYS)
@@ -181,6 +195,31 @@ def _fetch_recent_assignments(db: Session, day_start: datetime, day_end: datetim
         .where(Assignment.end_at > window_start)
         .where(Assignment.start_at < day_end)
     ).scalars().all()
+
+def _build_pair_counts(recent: List[Assignment]) -> Dict[int, Dict[int, int]]:
+    """
+    For each soldier, count how many times they were co-assigned with each fellow soldier
+    in the same mission window within the fairness window.
+    Returns: {soldier_id: {fellow_id: count}}
+    """
+    from collections import defaultdict
+    # key by exact window (mission_id, start_at, end_at) → collect soldier ids
+    by_key = defaultdict(list)
+    for a in recent:
+        by_key[(a.mission_id, a.start_at, a.end_at)].append(a.soldier_id)
+
+    pair_counts: Dict[int, Dict[int, int]] = {}
+    for soldiers in by_key.values():
+        if len(soldiers) < 2:
+            continue
+        for i in range(len(soldiers)):
+            for j in range(i + 1, len(soldiers)):
+                s1, s2 = soldiers[i], soldiers[j]
+                pair_counts.setdefault(s1, {}).setdefault(s2, 0)
+                pair_counts.setdefault(s2, {}).setdefault(s1, 0)
+                pair_counts[s1][s2] += 1
+                pair_counts[s2][s1] += 1
+    return pair_counts
 
 def _build_soldier_stats(recent: List[Assignment], day_start: datetime, day_end: datetime) -> Dict[int, SoldierStats]:
     stats: Dict[int, SoldierStats] = {}
@@ -211,7 +250,17 @@ def _build_soldier_stats(recent: List[Assignment], day_start: datetime, day_end:
             st.mission_count[a.mission_id] = st.mission_count.get(a.mission_id, 0) + 1
             st.recent_missions.add(a.mission_id)
 
+        bucket = _slot_bucket(a.start_at)
+        st.slot_bucket_count[bucket] = st.slot_bucket_count.get(bucket, 0) + 1
+
     return stats
+
+def _overlap_seconds(a_start: datetime, a_end: datetime, b_start: datetime, b_end: datetime) -> float:
+    x_start = max(a_start, b_start)
+    x_end = min(a_end, b_end)
+    if x_end > x_start:
+        return (x_end - x_start).total_seconds()
+    return 0.0
 
 def _score_candidate(
     soldier: Soldier,
@@ -219,6 +268,9 @@ def _score_candidate(
     start_at: datetime,
     end_at: datetime,
     st: SoldierStats,
+    assigned_here: set[int],                                  # NEW
+    pair_counts: Dict[int, Dict[int, int]],                   # NEW
+    vacation_blocks: Dict[int, List[tuple[datetime, datetime]]],  # NEW
 ) -> float:
     score = 0.0
 
@@ -226,9 +278,14 @@ def _score_candidate(
     # If no last_end_at, treat as well-rested (small boost from duration itself).
     if st.last_end_at is not None:
         gap = start_at - st.last_end_at
+        # subtract vacation time from the gap (vacation is NOT rest)
+        vac_secs = 0.0
+        for (bs_utc, be_utc) in vacation_blocks.get(soldier.id, []):
+            vac_secs += _overlap_seconds(st.last_end_at, start_at, bs_utc, be_utc)
+        if vac_secs > 0:
+            gap = timedelta(seconds=max(0.0, gap.total_seconds() - vac_secs))
+
         if gap < timedelta(0):
-            # Overlap with candidate's last assignment (should be filtered elsewhere),
-            # but if reached here, punish heavily.
             missing_hours = abs(gap.total_seconds()) / 3600.0
             score += WEIGHTS["recent_gap_penalty_per_hour_missing"] * (8.0 + missing_hours)
         elif gap < EIGHT_HOURS:
@@ -237,6 +294,7 @@ def _score_candidate(
         else:
             extra = (gap - EIGHT_HOURS).total_seconds() / 3600.0
             score += WEIGHTS["recent_gap_boost_per_hour"] * extra
+
     else:
         # No recent work → tiny preference (negative penalty)
         score += WEIGHTS["recent_gap_boost_per_hour"] * 4.0
@@ -246,6 +304,21 @@ def _score_candidate(
         score += WEIGHTS["same_mission_recent_penalty"]
         count = st.mission_count.get(mission_id, 0)
         score += WEIGHTS["mission_repeat_count_penalty"] * float(count)
+
+    # NEW: penalize repeating the same time-slot bucket (M/E/N)
+    bucket = _slot_bucket(start_at)
+    if bucket:
+        bucket_count = st.slot_bucket_count.get(bucket, 0)
+        if bucket_count > 0:
+            score += WEIGHTS.get("slot_repeat_count_penalty", 0.75) * float(bucket_count)
+
+    # NEW: penalize repeated pairing with the same fellow soldiers in this window
+    if assigned_here:
+        pairs = pair_counts.get(soldier.id, {})
+        for fellow_id in assigned_here:
+            c = pairs.get(fellow_id, 0)
+            if c > 0:
+                score += WEIGHTS.get("coassignment_repeat_penalty", 0.5) * float(c)
 
     # 3) Balance intra-day load
     score += WEIGHTS["today_assignment_count_penalty"] * float(st.today_count)
@@ -323,6 +396,8 @@ def _collect_candidates_for_slot(
     vacation_blocks: Dict[int, List[tuple[datetime, datetime]]],
     rr_start_idx: int,
     strict: bool,
+    assigned_here: set[int],                                  
+    pair_counts: Dict[int, Dict[int, int]],                   
 ) -> List[tuple[float, int, Soldier]]:
     """Return scored candidates. If strict=False, relax the 8h rest checks."""
     scored: List[tuple[float, int, Soldier]] = []
@@ -340,15 +415,17 @@ def _collect_candidates_for_slot(
         st = stats_by_soldier.setdefault(cand.id, SoldierStats())
 
         if strict:
-            # hard 8h floor around the candidate
-            if st.last_end_at is not None and (start_at - st.last_end_at) < EIGHT_HOURS:
-                continue
             occ_list = occupied_by_soldier.get(cand.id, [])
             if not _has_8h_rest_around(occ_list, start_at, end_at, EIGHT_HOURS):
                 continue
         # else: soft mode → allow <8h; warnings will be produced by your warnings endpoint
 
-        base_score = _score_candidate(cand, m_id, start_at, end_at, st)
+        base_score = _score_candidate(
+            cand, m_id, start_at, end_at, st,
+            assigned_here=assigned_here,
+            pair_counts=pair_counts,
+            vacation_blocks=vacation_blocks,
+        )
         rr_distance = (i - rr_start_idx) % max(1, len(pool))
         score = base_score + rr_distance * 0.001
         scored.append((score, i, cand))
@@ -364,6 +441,8 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
     vacation_blocks = _vacation_blocks_for_day(db, the_day)
     recent_assignments = _fetch_recent_assignments(db, day_start, day_end)
     stats_by_soldier = _build_soldier_stats(recent_assignments, day_start, day_end)
+    pair_counts = _build_pair_counts(recent_assignments)
+
 
     # Exact-window duplicates that already exist today
     existing_same_window: set[tuple[int, datetime, datetime]] = set(
@@ -427,6 +506,9 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
             ).all():
                 occupied_by_soldier.setdefault(sid, []).append((s_at, e_at))                                                                                                                            
 
+    # ----------------------------
+    # Phase 1: assign REQUIRED roles across all missions and slots
+    # ----------------------------
     for m in mission_list:
         try:
             slots: List[MissionSlot] = sorted(m.slots, key=lambda s: (s.start_time, s.end_time))
@@ -439,21 +521,11 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
                 )
                 continue
 
-            # explicit role demands
-            role_demands: List[Optional[int]] = []
-            sum_explicit = 0
+            # explicit role demands only (no generic here)
+            explicit_roles: List[int] = []
             for r in reqs:
                 if r.count and r.count > 0:
-                    role_demands.extend([r.role_id] * r.count)
-                    sum_explicit += r.count
-
-            # generic demand (no specific role)
-            generic_count = 0
-            if getattr(m, "total_needed", None):
-                remaining = max(0, int(m.total_needed or 0) - sum_explicit)
-                if remaining > 0:
-                    generic_count = remaining
-                    role_demands.extend([None] * remaining)
+                    explicit_roles.extend([r.role_id] * r.count)
 
             created_here = 0
 
@@ -463,20 +535,25 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
                 # track who we've already placed in THIS slot/window
                 assigned_here: set[int] = set()
 
-                for role_id in role_demands:
+                for role_id in explicit_roles:
                     # decide the pool
-                    if role_id is None:
-                        pool = ctx["all_soldiers"]
-                    else:
-                        pool = ctx["soldiers_by_role"].get(role_id, [])
+                    pool = [
+                        s for s in ctx["soldiers_by_role"].get(role_id, [])
+                        if (s.id, m.id) not in restricted_pairs
+                    ]
 
+                    # Remove anyone who is already assigned to this exact window
+                    pool = [s for s in pool if (s.id, start_at, end_at) not in existing_same_window]
+
+                    # Filter out overlap with vacations or existing assignments
+                    # Overlaps handled by occupied_by_soldier; vacations blocked by _collect logic
                     if not pool:
                         continue
 
-                    # round-robin starting point for this role (or None)
+                    # round-robin starting point for this role
                     start_idx = rr_index.get(role_id, 0)
 
-                    # 1) Strict pass (keeps 8h-rest rules)
+                    # Strict pass ONLY (no red warnings allowed)
                     scored = _collect_candidates_for_slot(
                         pool=pool,
                         m_id=m.id,
@@ -489,25 +566,11 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
                         vacation_blocks=vacation_blocks,
                         rr_start_idx=start_idx,
                         strict=True,
+                        assigned_here=assigned_here,            # NEW
+                        pair_counts=pair_counts,                # NEW
                     )
 
-                    # 2) Soft fallback (relaxes 8h-rest, still forbids overlap/vacation/restrictions)
-                    if not scored:
-                        scored = _collect_candidates_for_slot(
-                            pool=pool,
-                            m_id=m.id,
-                            start_at=start_at,
-                            end_at=end_at,
-                            stats_by_soldier=stats_by_soldier,
-                            restricted_pairs=restricted_pairs,
-                            existing_same_window=existing_same_window,
-                            occupied_by_soldier=occupied_by_soldier,
-                            vacation_blocks=vacation_blocks,
-                            rr_start_idx=start_idx,
-                            strict=False,
-                        )
-
-                    # If we still have nobody, leave slot empty
+                    # If we have nobody, leave the seat empty
                     if not scored:
                         continue
 
@@ -516,14 +579,13 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
                     # advance RR cursor to next after chosen_i for this role
                     rr_index[role_id] = (chosen_i + 1) % max(1, len(pool))
 
-
                     # remember this soldier is used for this slot, so we won't pick them again
                     assigned_here.add(soldier.id)
 
                     a = Assignment(
                         mission_id=m.id,
                         soldier_id=soldier.id,
-                        role_id=role_id,  # None for generic slots
+                        role_id=role_id,
                         start_at=start_at,
                         end_at=end_at,
                     )
@@ -537,13 +599,112 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
                     st = stats_by_soldier.setdefault(soldier.id, SoldierStats())
                     _update_stats_after_assignment(st, m.id, start_at, end_at, day_start, day_end)
 
-
             results.append(
                 PlanResultItem(mission={"id": m.id, "name": m.name}, created_count=created_here, error=None)
             )
         except Exception as ex:
             results.append(
-                PlanResultItem(mission={"id": m.id, "name": m.name}, created_count=None, error=str(ex))
+                PlanResultItem(
+                    mission={"id": m.id, "name": m.name}, created_count=None, error=str(ex)
+                )
+            )
+
+    # ----------------------------
+    # Phase 2: assign GENERIC seats across all missions and slots
+    # ----------------------------
+    for m in mission_list:
+        try:
+            slots: List[MissionSlot] = sorted(m.slots, key=lambda s: (s.start_time, s.end_time))
+            reqs: List[MissionRequirement] = m.requirements or []
+
+            if not slots:
+                # already appended result in phase 1
+                continue
+
+            # calculate how many generics are required
+            sum_explicit = sum((r.count or 0) for r in reqs)
+            generic_count = 0
+            if getattr(m, "total_needed", None):
+                remaining = max(0, int(m.total_needed or 0) - sum_explicit)
+                if remaining > 0:
+                    generic_count = remaining
+
+            created_here = 0
+
+            for slot in slots:
+                start_at, end_at = Assignment.window_for(slot.start_time, slot.end_time, the_day)
+
+                assigned_here: set[int] = set()
+
+                # generic seats for this mission window
+                for _ in range(generic_count):
+                    # anyone valid for the mission (any role), excluding restricted pairs
+                    pool = [
+                        s for s in ctx["all_soldiers"]
+                        if (s.id, m.id) not in restricted_pairs
+                    ]
+
+                    # Remove anyone who is already assigned to this exact window
+                    pool = [s for s in pool if (s.id, start_at, end_at) not in existing_same_window]
+
+                    if not pool:
+                        continue
+
+                    # round-robin starting point for "generic" (key None)
+                    start_idx = rr_index.get(None, 0)
+
+                    # Strict pass ONLY (no red warnings allowed)
+                    scored = _collect_candidates_for_slot(
+                        pool=pool,
+                        m_id=m.id,
+                        start_at=start_at,
+                        end_at=end_at,
+                        stats_by_soldier=stats_by_soldier,
+                        restricted_pairs=restricted_pairs,
+                        existing_same_window=existing_same_window,
+                        occupied_by_soldier=occupied_by_soldier,
+                        vacation_blocks=vacation_blocks,
+                        rr_start_idx=start_idx,
+                        strict=True,
+                        assigned_here=assigned_here,            # NEW
+                        pair_counts=pair_counts,                # NEW
+                    )
+
+                    if not scored:
+                        continue
+
+                    chosen_score, chosen_i, soldier = scored[0]
+
+                    # advance RR cursor for generic seats (key None)
+                    rr_index[None] = (chosen_i + 1) % max(1, len(pool))
+
+                    assigned_here.add(soldier.id)
+
+                    a = Assignment(
+                        mission_id=m.id,
+                        soldier_id=soldier.id,
+                        role_id=None,
+                        start_at=start_at,
+                        end_at=end_at,
+                    )
+                    db.add(a)
+                    created_here += 1
+
+                    existing_same_window.add((soldier.id, start_at, end_at))
+                    occupied_by_soldier.setdefault(soldier.id, []).append((start_at, end_at))
+
+                    st = stats_by_soldier.setdefault(soldier.id, SoldierStats())
+                    _update_stats_after_assignment(st, m.id, start_at, end_at, day_start, day_end)
+
+            # Phase 2 doesn’t append a second result row; counts for mission were already added in phase 1.
+            # If you prefer, you can merge counts or report separately.
+
+        except Exception as ex:
+            # If something fails in phase 2, add an error row (optional)
+            results.append(
+                PlanResultItem(
+                    mission={"id": m.id, "name": m.name}, created_count=None, error=str(ex)
+                )
             )
 
     db.commit()
