@@ -16,6 +16,7 @@ import {
 } from "../api";
 
 import Modal from "../components/Modal";
+import SoldierHistoryModal from "../components/SoldierHistoryModal";
 import { getPlannerWarnings, type PlannerWarning } from "../api"
 import { listSoldierVacations, type Vacation } from "../api";
 
@@ -176,6 +177,17 @@ export default function Planner() {
   const [vacationSoldiers, setVacationSoldiers] = useState<
     { soldier: Soldier; leavingToday: boolean; returningToday: boolean }[]
   >([]);
+
+  // Mission History modal state
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [historySoldierId, setHistorySoldierId] = useState<number | null>(null);
+  const [historySoldierName, setHistorySoldierName] = useState<string>("");
+
+  function openSoldierHistory(soldierId: number, soldierName: string) {
+    setHistorySoldierId(soldierId);
+    setHistorySoldierName(soldierName);
+    setIsHistoryOpen(true);
+  }
 
   const [pendingEmptySlot, setPendingEmptySlot] = useState<null | {
     missionId: number;
@@ -1330,6 +1342,13 @@ export default function Planner() {
         )}
       </Modal>
 
+      <SoldierHistoryModal
+        soldierId={historySoldierId ?? 0}
+        soldierName={historySoldierName}
+        isOpen={isHistoryOpen}
+        onClose={() => setIsHistoryOpen(false)}
+      />
+
       <section style={{ marginTop: 16, marginBottom: 16 }}>
         <h2 style={{ marginBottom: 8 }}>Warnings</h2>
         {warnLoading && <div>Loading…</div>}
@@ -1696,7 +1715,18 @@ export default function Planner() {
                                         : tier === "orange"
                                         ? { color: "#d97706", fontWeight: 600 } // orange-600
                                         : undefined;
-                                    return <span style={style}>{r.soldier_name}</span>;
+                                    return (
+                                      <button
+                                        type="button"
+                                        onClick={() => openSoldierHistory(r.soldier_id!, r.soldier_name)}
+                                        className="underline"
+                                        style={style}
+                                        title="View Mission History"
+                                      >
+                                        {r.soldier_name}
+                                      </button>
+                                    );
+
                                   })()}
                                   <button
                                     type="button"
