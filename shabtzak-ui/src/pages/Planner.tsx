@@ -57,6 +57,32 @@ function humanError(e: any, fallback: string) {
 
 const APP_TZ = (import.meta as any)?.env?.VITE_APP_TZ || "UTC";
 
+// Format "YYYY-MM-DD HH:mm" from epoch ms in a specific TZ
+function formatYMDHMFromMs(ms: number, tz: string) {
+  try {
+    const d = new Date(ms);
+    const parts = new Intl.DateTimeFormat(undefined, {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).formatToParts(d);
+
+    const get = (t: Intl.DateTimeFormatPartTypes) => parts.find(p => p.type === t)?.value ?? "";
+    const yyyy = get("year");
+    const mm = get("month");
+    const dd = get("day");
+    const hh = get("hour");
+    const min = get("minute");
+    return `${yyyy}-${mm}-${dd} ${hh}:${min}`;
+  } catch {
+    return new Date(ms).toISOString();
+  }
+}
+
 async function fillPlanForDay(
   forDay: string,
   replace = false,
@@ -1093,6 +1119,39 @@ async function shufflePlanner() {
     return startHHMMSS.slice(0,5) > endHHMMSS.slice(0,5);
   }
 
+  // Convert a YYYY-MM-DD (local) + "HH:MM:SS" to epoch ms (local JS Date)
+  function msFor(dayISO: string, hhmmss: string): number {
+    const [y, m, d] = dayISO.split("-").map(Number);
+    const [hh, mm] = hhmmss.slice(0, 5).split(":").map(Number);
+    return new Date(y, (m || 1) - 1, d || 1, hh || 0, mm || 0, 0, 0).getTime();
+  }
+
+  // Overlap in ms between [aStart,aEnd) and [bStart,bEnd)
+  function overlapMs(aStart: number, aEnd: number, bStart: number, bEnd: number): number {
+    const lo = Math.max(aStart, bStart);
+    const hi = Math.min(aEnd, bEnd);
+    return Math.max(0, hi - lo);
+  }
+
+  // Extract "HH:MM" from either "HH:MM:SS" or "YYYY-MM-DD HH:mm" or ISO string
+  function hhmm(x: string | null | undefined): string | null {
+    if (!x) return null;
+    // If ISO or "YYYY-MM-DD HH:mm(:ss?)"
+    if (x.length >= 16 && (x[4] === "-" || x[10] === " ")) {
+      return x.slice(11, 16); // "HH:mm"
+    }
+    // If "HH:MM:SS"
+    if (x.length >= 5 && x[2] === ":") {
+      return x.slice(0, 5);
+    }
+    return null;
+  }
+
+  // Basic interval overlap check
+  function overlaps(aStart: number, aEnd: number, bStart: number, bEnd: number): boolean {
+    return aStart < bEnd && aEnd > bStart;
+  }
+
   function nextDayISO(dayISO: string) {
     return shiftDay(dayISO, 1);
   }
@@ -1100,24 +1159,7 @@ async function shufflePlanner() {
   const grouped: Grouped = useMemo(() => {
     const byMission = new Map<string, Map<string, { startLabel: string; endLabel: string; items: FlatRosterItem[] }>>();
 
-    // group existing rows by mission and time slot
-    for (const r of sortedRows) {
-      const missionName = r.mission?.name ?? "";
-      const sMs = epochMs(r.start_at, (r as any).start_epoch_ms);
-      const eMs = epochMs(r.end_at, (r as any).end_epoch_ms);
-      const key = slotKey(missionName, sMs, eMs);
-      const startLabel = r.start_local ? formatYMDHM(r.start_local, APP_TZ) : formatYMDHM(r.start_at, APP_TZ);
-      const endLabel = r.end_local ? formatYMDHM(r.end_local, APP_TZ) : formatYMDHM(r.end_at, APP_TZ);
-
-      if (!byMission.has(missionName)) byMission.set(missionName, new Map());
-      const slots = byMission.get(missionName)!;
-      if (!slots.has(key)) {
-        slots.set(key, { startLabel, endLabel, items: [] });
-      }
-      slots.get(key)!.items.push(r);
-    }
-
-    // ensure all missions and their slots appear
+    // 1) Seed all missions and their configured MissionSlots (labels always from MissionSlots)
     for (const m of allMissions) {
       const missionName = m.name ?? "";
       if (!byMission.has(missionName)) byMission.set(missionName, new Map());
@@ -1130,18 +1172,53 @@ async function shufflePlanner() {
         const startLabel = labelFor(startDay, s.start_time);
         const endLabel = labelFor(endDay, s.end_time);
 
-        // NEW: if a slot with same labels already exists (from real assignments),
-        // do NOT add a seeded duplicate.
-        const alreadyExists = Array.from(slots.values()).some(
-          v => v.startLabel === startLabel && v.endLabel === endLabel
-        );
-        if (alreadyExists) continue;
+        const dup = Array.from(slots.values()).some(v => v.startLabel === startLabel && v.endLabel === endLabel);
+        if (dup) continue;
 
         const key = `seed__${missionName}__${startLabel}__${endLabel}`;
         if (!slots.has(key)) {
           slots.set(key, { startLabel, endLabel, items: [] });
         }
       }
+    }
+
+    // 2) Push existing rows into the single best-overlapping seeded slot for that mission
+    for (const r of sortedRows) {
+      const missionName = r.mission?.name ?? "";
+      if (!byMission.has(missionName)) byMission.set(missionName, new Map());
+      const slots = byMission.get(missionName)!;
+
+      const rStartMs = epochMs(r.start_at, (r as any).start_epoch_ms);
+      const rEndMs   = epochMs(r.end_at,   (r as any).end_epoch_ms);
+
+      // Find this mission's configured slots
+      const missionMeta = allMissions.find(mm => (mm.name ?? "") === missionName) || null;
+      const missionSlots = missionMeta ? (slotsByMission.get(missionMeta.id) || []) : [];
+
+      let bestKey: string | null = null;
+      let bestOverlap = -1;
+
+      for (const s of missionSlots) {
+        const sStartMs = msFor(day, s.start_time);
+        const sEndMs   = msFor(isOvernight(s.start_time, s.end_time) ? nextDayISO(day) : day, s.end_time);
+        const ov = overlapMs(rStartMs, rEndMs, sStartMs, sEndMs);
+        if (ov > bestOverlap) {
+          const startLabel = labelFor(day, s.start_time);
+          const endLabel   = labelFor(isOvernight(s.start_time, s.end_time) ? nextDayISO(day) : day, s.end_time);
+          const seedKey    = `seed__${missionName}__${startLabel}__${endLabel}`;
+          if (slots.has(seedKey)) {
+            bestOverlap = ov;
+            bestKey = seedKey;
+          }
+        }
+      }
+
+      // Only attach to a MissionSlot if there is any overlap (>0)
+      if (bestKey && bestOverlap > 0) {
+        slots.get(bestKey)!.items.push(r);
+      }
+      // IMPORTANT: no fallback that creates a display slot from the row window.
+      // This guarantees the Time Slot column always uses MissionSlot labels.
     }
 
     // map mission name -> Mission (for id & requirements)
@@ -1165,22 +1242,15 @@ async function shufflePlanner() {
       const slotArr: Grouped[number]["slots"] = [];
       const seenSlots = new Set<string>();
 
-      for (const r of sortedRows) {
-        const mm = r.mission?.name ?? "";
-        if (mm !== m) continue;
-        const sMs = epochMs(r.start_at, (r as any).start_epoch_ms);
-        const eMs = epochMs(r.end_at, (r as any).end_epoch_ms);
-        const k = slotKey(m, sMs, eMs);
-        if (!seenSlots.has(k)) {
-          const v = slots.get(k)!;
-          slotArr.push({ key: k, startLabel: v.startLabel, endLabel: v.endLabel, items: v.items });
-          seenSlots.add(k);
-        }
-      }
-
-      // also include any seeded (empty) slots not yet added
-      for (const [k, v] of slots) {
-        if (seenSlots.has(k)) continue;
+      // Build slot array strictly from seeded slots (so labels are from MissionSlots)
+      const entries = Array.from(slots.entries());
+      // Optional: sort by startLabel/endLabel for stable ordering
+      entries.sort(
+        (a, b) =>
+          a[1].startLabel.localeCompare(b[1].startLabel) ||
+          a[1].endLabel.localeCompare(b[1].endLabel)
+      );
+      for (const [k, v] of entries) {
         slotArr.push({ key: k, startLabel: v.startLabel, endLabel: v.endLabel, items: v.items });
       }
 
