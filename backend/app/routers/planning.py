@@ -153,6 +153,30 @@ def _has_8h_rest_around(
     ok_next = True if next_start is None else (next_start - cand_end) >= min_gap
     return ok_prev and ok_next
 
+def _nearest_gaps_hours(
+    occupied: List[tuple[datetime, datetime]],
+    cand_start: datetime,
+    cand_end: datetime,
+) -> tuple[float, float]:
+    """
+    Returns (gap_before_hours, gap_after_hours) with respect to the nearest
+    existing assignments in `occupied`. If none on one side, treat as a large gap.
+    """
+    if not occupied:
+        # No neighbors -> huge effective rest both sides
+        return 1e6, 1e6
+
+    prev_end = None
+    next_start = None
+    for s, e in occupied:
+        if e <= cand_start and (prev_end is None or e > prev_end):
+            prev_end = e
+        if s >= cand_end and (next_start is None or s < next_start):
+            next_start = s
+
+    gap_before = (cand_start - prev_end).total_seconds() / 3600.0 if prev_end else 1e6
+    gap_after = (next_start - cand_end).total_seconds() / 3600.0 if next_start else 1e6
+    return gap_before, gap_after
 
 # -------- Fairness/Rotation configuration --------
 FAIRNESS_WINDOW_DAYS = 14  # look back this many days for rotation/workload stats
@@ -161,15 +185,22 @@ EIGHT_HOURS = timedelta(hours=8)
 # We minimize this score (lower = more preferred).
 # Tweak weights to taste; all are >= 0.
 WEIGHTS = {
-    "recent_gap_penalty_per_hour_missing": 2.0,    # keep: strong penalty if < 8h
+    "recent_gap_penalty_per_hour_missing": 2.0,     # strong penalty if < 8h
     "same_mission_recent_penalty": 5.0,
     "mission_repeat_count_penalty": 1.0,
-    "today_assignment_count_penalty": 3.0,         # was 2.0 → nudge away from double-dipping today
-    "total_hours_window_penalty_per_hour": 0.08,   # was 0.05 → favor those who worked fewer hours recently
-    "recent_gap_boost_per_hour": -0.4,             # was -0.1 → stronger reward per hour beyond 8h
+    "today_assignment_count_penalty": 3.0,
+    "total_hours_window_penalty_per_hour": 0.08,
+
+    # Make extra rest (beyond 8h) much more attractive, so under-rested soldiers keep resting now.
+    "recent_gap_boost_per_hour": -1.2,              # was -0.4
 
     "slot_repeat_count_penalty": 0.75,
     "coassignment_repeat_penalty": 0.5,
+
+    # New: explicitly push the algorithm toward max-min rest across the day.
+    # Reward large 'gap before' (assign the most rested now) and avoid shrinking the 'gap after'.
+    "rest_before_priority_per_hour": -1.0,          # favors candidates with larger rest before
+    "rest_after_priority_per_hour": -0.5,           # disfavors creating a short next rest
 }
 
 class SoldierStats:
@@ -428,9 +459,24 @@ def _collect_candidates_for_slot(
             pair_counts=pair_counts,
             vacation_blocks=vacation_blocks,
         )
+
+        # Fairness add-on: push toward max-min rest across the day.
+        # Compute nearest rest gaps around this potential placement.
+        occ_list = occupied_by_soldier.get(cand.id, [])
+        gap_before_h, gap_after_h = _nearest_gaps_hours(occ_list, start_at, end_at)
+
+        # Reward assigning the most-rested soldier now (big gap_before),
+        # and avoid creating too-short future rests (penalize small gap_after).
+        rest_adjust = (
+            WEIGHTS.get("rest_before_priority_per_hour", 0.0) * gap_before_h
+            + WEIGHTS.get("rest_after_priority_per_hour", 0.0) * gap_after_h
+        )
+
         rr_distance = (i - rr_start_idx) % max(1, len(pool))
-        score = base_score + rr_distance * 0.001
+        score = base_score + rest_adjust + rr_distance * 0.001
+
         scored.append((score, i, cand))
+
 
     scored.sort(key=lambda t: (t[0], t[1]))
     return scored

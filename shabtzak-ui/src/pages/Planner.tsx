@@ -316,6 +316,7 @@ export default function Planner() {
 
 
 async function runPlanner() {
+  deletePlanForDay();
   setBusy(true);
   try {
     // 1) Ask the backend to fill the plan for the selected day
