@@ -990,7 +990,7 @@ export default function SoldiersPage() {
 
                                         {/* vacations */}
                                         <td>
-                                            <button onClick={() => openVacations(s)}>Manage</button>
+                                            <button onClick={() => openVacations(s)}>Vacations</button>
                                         </td>
                                         <td>
                                             <button onClick={() => setHistoryFor({ id: s.id, name: s.name })}>

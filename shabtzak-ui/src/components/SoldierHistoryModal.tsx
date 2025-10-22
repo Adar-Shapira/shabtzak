@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react"
 import Modal from "./Modal"
 import {
+  api,
   getSoldierMissionHistory,
   listMissionSlots,
   type MissionHistoryItem,
@@ -14,6 +15,23 @@ type Props = {
   soldierName: string
   isOpen: boolean
   onClose: () => void
+}
+
+// "YYYY-MM-DD HH:MM" formatter from ISO-ish strings we get from the API
+function toYMDHM(isoLike: string | undefined | null): string {
+  if (!isoLike) return ""
+  // Prefer strings that already include local offset (start_local/end_local)
+  // Examples: "2025-10-22T14:00:00+03:00" -> "2025-10-22 14:00"
+  //           "2025-10-22T14:00:00Z"      -> "2025-10-22 14:00"
+  //           "2025-10-22 14:00"          -> stays as-is
+  const s = String(isoLike)
+  // If already "YYYY-MM-DD HH:MM"
+  if (s.length >= 16 && s[4] === "-" && (s[10] === " " || s[10] === "T")) {
+    const datePart = s.slice(0, 10)
+    const timePart = s.slice(11, 16)
+    return `${datePart} ${timePart}`
+  }
+  return s
 }
 
 // "HH:MM" from "HH:MM:SS"
@@ -45,40 +63,38 @@ export default function SoldierHistoryModal({ soldierId, soldierName, isOpen, on
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [items, setItems] = useState<MissionHistoryItem[]>([])
+  const [rostersByDay, setRostersByDay] = useState<Map<string, any[]>>(new Map())
   const [slotsByMission, setSlotsByMission] = useState<Map<number, MissionSlot[]>>(new Map())
 
   useEffect(() => {
     if (!isOpen) return
     let cancelled = false
+    setLoading(true)
+    setError(null)
 
     ;(async () => {
-        setLoading(true)
-        setError(null)
         try {
-        const history = await getSoldierMissionHistory(soldierId)
+        const hist = await getSoldierMissionHistory(soldierId)
         if (cancelled) return
+        setItems(hist)
 
-        setItems(history)
+        // Gather unique dates from history
+        const dates = Array.from(new Set(hist.map(h => h.slot_date).filter(Boolean))) as string[]
 
-        // Collect unique mission ids
-        const missionIds = Array.from(
-            new Set(history.map(h => h.mission_id).filter((v): v is number => typeof v === "number"))
-        )
-
-        // Load slots for those missions
-        const entries: Array<[number, MissionSlot[]]> = await Promise.all(
-            missionIds.map(async (mid) => {
+        // Fetch the roster for each date and store in a Map
+        const entries: Array<[string, any[]]> = []
+        for (const d of dates) {
             try {
-                const slots = await listMissionSlots(mid)
-                return [mid, slots] as [number, MissionSlot[]]
+            const { data } = await api.get("/assignments/day-roster", { params: { day: d } })
+            const arr = Array.isArray(data?.items) ? data.items : []
+            entries.push([d, arr])
             } catch {
-                return [mid, []] as [number, MissionSlot[]]
+            entries.push([d, []])
             }
-            })
-        )
-
-        if (cancelled) return
-        setSlotsByMission(new Map(entries))
+        }
+        if (!cancelled) {
+            setRostersByDay(new Map(entries))
+        }
         } catch (e: any) {
         if (!cancelled) setError(e?.message || "Failed to load history")
         } finally {
@@ -108,43 +124,31 @@ export default function SoldierHistoryModal({ soldierId, soldierName, isOpen, on
             </thead>
             <tbody>
             {items.map((it) => {
+                // Try to find the exact assignment row for this soldier, mission, and date
                 const dayISO = it.slot_date || ""
-                const rawStart = it.start_time || ""
-                const rawEnd = it.end_time || ""
+                const dayRoster = rostersByDay.get(dayISO) || []
+                const match = dayRoster.find((r: any) =>
+                r?.soldier_id === soldierId &&
+                (r?.mission?.id === it.mission_id)
+                )
 
-                // Default HH:MM from raw
-                let startHM = hhmm(rawStart)
-                let endHM = hhmm(rawEnd)
+                let startLabel = ""
+                let endLabel = ""
 
-                // Try to snap to mission slot hours
-                if (it.mission_id && dayISO && rawStart && rawEnd) {
-                const slots = slotsByMission.get(it.mission_id) || []
-                const rStart = msFor(dayISO, rawStart)
-                const rEnd0 = msFor(dayISO, rawEnd)
-                const rEnd = isOvernight(rawStart, rawEnd) ? rEnd0 + 24 * 60 * 60 * 1000 : rEnd0
-
-                let bestIdx = -1
-                let bestOv = -1
-                for (let i = 0; i < slots.length; i++) {
-                    const s = slots[i]
-                    const sStart = msFor(dayISO, s.start_time)
-                    const sEnd0 = msFor(dayISO, s.end_time)
-                    const sEnd = isOvernight(s.start_time, s.end_time) ? sEnd0 + 24 * 60 * 60 * 1000 : sEnd0
-                    const ov = overlapMs(rStart, rEnd, sStart, sEnd)
-                    if (ov > bestOv) {
-                    bestIdx = i
-                    bestOv = ov
-                    }
+                if (match) {
+                // Prefer server-provided local timestamps if present
+                const sLocal = match.start_local || match.start_at
+                const eLocal = match.end_local || match.end_at
+                startLabel = toYMDHM(sLocal)
+                endLabel = toYMDHM(eLocal)
+                } else {
+                // Fallback to raw history times if no roster match found
+                // This keeps the UI populated even in rare mismatch cases
+                startLabel = dayISO && it.start_time ? `${dayISO} ${String(it.start_time).slice(0,5)}` : ""
+                endLabel = dayISO && it.end_time ? `${dayISO} ${String(it.end_time).slice(0,5)}` : ""
                 }
 
-                if (bestIdx >= 0 && bestOv > 0) {
-                    const s = slots[bestIdx]
-                    startHM = hhmm(s.start_time)
-                    endHM = hhmm(s.end_time)
-                }
-                }
-
-                const timeSlot = dayISO && startHM && endHM ? `${dayISO} ${startHM} → ${dayISO} ${endHM}` : ""
+                const timeSlot = startLabel && endLabel ? `${startLabel} → ${endLabel}` : ""
 
                 return (
                 <tr key={`${it.mission_id}-${it.slot_date}-${it.start_time}`}>

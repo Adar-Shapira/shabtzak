@@ -599,6 +599,7 @@ async function shufflePlanner() {
 
     const H8 = 8 * 60 * 60 * 1000;
     const H16 = 16 * 60 * 60 * 1000;
+    const H20 = 20 * 60 * 60 * 1000;
 
     let minPositiveGap = Number.POSITIVE_INFINITY;
     for (let i = 0; i < intervals.length - 1; i++) {
@@ -630,7 +631,7 @@ async function shufflePlanner() {
     return out;
   }
 
-  function restTierForRow(row: FlatRosterItem): "red" | "orange" | null {
+  function restTierForRow(row: FlatRosterItem): "red" | "orange" | "green" | null {
     // Need a soldier and a valid interval
     if (!row.soldier_id) return null;
 
@@ -663,8 +664,10 @@ async function shufflePlanner() {
       if (pos === -1) pos = items.length;
       const prev = items[pos - 1];
       const next = items[pos];
-      const H8  = 8 * 60 * 60 * 1000;
+      const H8  = 8  * 60 * 60 * 1000;
       const H16 = 16 * 60 * 60 * 1000;
+      const H20 = 20 * 60 * 60 * 1000;
+
 
       let minGap = Number.POSITIVE_INFINITY;
       if (prev) {
@@ -679,6 +682,7 @@ async function shufflePlanner() {
       if (!Number.isFinite(minGap)) return null;
       if (minGap < H8) return "red";
       if (minGap < H16) return "orange";
+      if (minGap > H20) return "green";
       return null;
     }
 
@@ -689,6 +693,7 @@ async function shufflePlanner() {
 
     const H8  = 8 * 60 * 60 * 1000;
     const H16 = 16 * 60 * 60 * 1000;
+    const H20 = 20 * 60 * 60 * 1000;
 
     let minGap = Number.POSITIVE_INFINITY;
     if (prev) {
@@ -703,6 +708,7 @@ async function shufflePlanner() {
     if (!Number.isFinite(minGap)) return null;
     if (minGap < H8) return "red";
     if (minGap < H16) return "orange";
+    if (minGap > H20) return "green";
     return null;
   }
 
@@ -966,7 +972,7 @@ async function shufflePlanner() {
 
   // Worst warning tier ("red" | "orange" | null) for a soldier across ALL of their rows
   // that overlap the selected day window, using the same neighbor-gap logic as the table.
-  function restTierForSoldier(dayISO: string, soldierId: number): "red" | "orange" | null {
+  function restTierForSoldier(dayISO: string, soldierId: number): "red" | "orange" | "green" | null {
     const { start: dayStart, end: dayEnd } = dayBoundsMs(dayISO);
 
     // Take only intervals that overlap the selected day (but rowsForWarnings contains prev/day/next).
@@ -988,6 +994,7 @@ async function shufflePlanner() {
 
     const H8  = 8 * 60 * 60 * 1000;
     const H16 = 16 * 60 * 60 * 1000;
+    const H20 = 20 * 60 * 60 * 1000;
 
     // Any overlap anywhere → red
     for (let i = 0; i < items.length - 1; i++) {
@@ -1002,8 +1009,9 @@ async function shufflePlanner() {
     }
 
     if (!Number.isFinite(minGap)) return null;
-    if (minGap < H8)  return "red";
+    if (minGap < H8) return "red";
     if (minGap < H16) return "orange";
+    if (minGap > H20) return "green";
     return null;
   }
 
@@ -1863,12 +1871,14 @@ async function shufflePlanner() {
                                     if (!r.soldier_id || !r.soldier_name) {
                                       return <span style={{ color: "crimson" }}>Unassigned</span>;
                                     }
-                                    const tier = restTierForRow(r); // "red" | "orange" | null
+                                    const tier = restTierForRow(r); // "red" | "orange" | "green" | null
                                     const style =
                                       tier === "red"
                                         ? { color: "crimson", fontWeight: 600 }
                                         : tier === "orange"
                                         ? { color: "#d97706", fontWeight: 600 } // orange-600
+                                        : tier === "green"
+                                        ? { color: "#15803d", fontWeight: 600 } // green-700
                                         : undefined;
                                     return (
                                       <button
