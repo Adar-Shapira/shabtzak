@@ -184,6 +184,15 @@ export default function Planner() {
   const [day, setDay] = useState<string>(today);
 
   const [busy, setBusy] = useState(false);
+  const [lockedByDay, setLockedByDay] = useState<Record<string, boolean>>(() => {
+    try {
+      const raw = localStorage.getItem("planner.lockedByDay");
+      return raw ? JSON.parse(raw) : {};
+    } catch {
+      return {};
+    }
+  });
+  const locked = !!lockedByDay[day];
 
   const [listBusy, setListBusy] = useState(false);
   const [rows, setRows] = useState<FlatRosterItem[]>([]);
@@ -713,6 +722,7 @@ async function shufflePlanner() {
   }
 
   async function openChangeModal(assignmentId: number, roleName: string | null) {
+    if (locked) return;
     setPendingAssignmentId(assignmentId);
     setChangeError(null);
     setIsChangeOpen(true);
@@ -756,6 +766,7 @@ async function shufflePlanner() {
     roleName?: string | null,
     roleId?: number | null
   ) {
+    if (locked) return;
     const startHHMM = startLabel.slice(-5);
     const endHHMM   = endLabel.slice(-5);
 
@@ -1310,6 +1321,14 @@ async function shufflePlanner() {
     })();
   }, [day]);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem("planner.lockedByDay", JSON.stringify(lockedByDay));
+    } catch {
+      // ignore persistence errors
+    }
+  }, [lockedByDay]);
+
   return (
     <div className="p-4 space-y-4">
       <h1 className="text-xl font-semibold">Planner</h1>
@@ -1324,21 +1343,21 @@ async function shufflePlanner() {
         />
         <button
           onClick={runPlanner}
-          disabled={busy}
+          disabled={busy || locked}
           className="border rounded px-3 py-1 hover:bg-gray-50 disabled:opacity-50"
         >
           {busy ? "Planning…" : "Fill plan for day"}
         </button>
         <button
           onClick={shufflePlanner}
-          disabled={busy}
+          disabled={busy || locked}
           className="border rounded px-3 py-1 hover:bg-gray-50 disabled:opacity-50"
         >
           {busy ? "Shuffling…" : "Shuffle Plan"}
         </button>
         <button
           onClick={deletePlanForDay}
-          disabled={busy}
+          disabled={busy || locked}
           className="border rounded px-3 py-1 hover:bg-gray-50 disabled:opacity-50"
           style={{ marginLeft: 8 }}
         >
@@ -1359,6 +1378,20 @@ async function shufflePlanner() {
           style={{ marginLeft: 8 }}
         >
           Available Soldiers
+        </button>
+        <button
+          onClick={() =>
+            setLockedByDay(prev => {
+              const next = { ...prev, [day]: !prev[day] };
+              return next;
+            })
+          }
+          className="border rounded px-3 py-1 hover:bg-gray-50"
+          style={{ marginLeft: 8 }}
+          aria-pressed={locked}
+          title={locked ? `Unlock ${day}` : `Lock ${day}`}
+        >
+          {locked ? "Unlock" : "Lock"}
         </button>
       </div>
 
@@ -1776,6 +1809,7 @@ async function shufflePlanner() {
                                       <button
                                         type="button"
                                         className="border rounded px-2 py-1"
+                                        disabled={locked}
                                         onClick={() =>
                                           g.missionId &&
                                           openChangeModalForEmptySlot(
