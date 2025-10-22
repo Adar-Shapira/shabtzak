@@ -102,61 +102,56 @@ export default function SoldierHistoryModal({ soldierId, soldierName, isOpen, on
             <thead>
               <tr>
                 <th className="border p-2 text-left">Mission</th>
-                <th className="border p-2 text-left">Date</th>
-                <th className="border p-2 text-left">Start</th>
-                <th className="border p-2 text-left">End</th>
+                <th className="border p-2 text-left">Time Slot</th>
                 <th className="border p-2 text-left">Fellow Soldiers</th>
               </tr>
             </thead>
             <tbody>
             {items.map((it) => {
-                // Fallbacks
                 const dayISO = it.slot_date || ""
                 const rawStart = it.start_time || ""
                 const rawEnd = it.end_time || ""
 
-                // Default display (raw) if we fail to match any slot
-                let displayStart = hhmm(rawStart)
-                let displayEnd = hhmm(rawEnd)
+                // Default HH:MM from raw
+                let startHM = hhmm(rawStart)
+                let endHM = hhmm(rawEnd)
 
-                // Try to snap to the best-overlapping MissionSlot for this mission & date
+                // Try to snap to mission slot hours
                 if (it.mission_id && dayISO && rawStart && rawEnd) {
                 const slots = slotsByMission.get(it.mission_id) || []
-                const rowStartMs = msFor(dayISO, rawStart)
-                const rowEndMs   = msFor(isOvernight(rawStart, rawEnd) ? dayISO /* overnight handled below */ : dayISO, rawEnd)
-                // If overnight by times, the end is on next day
-                const rowEndFixed = isOvernight(rawStart, rawEnd) ? rowEndMs + 24 * 60 * 60 * 1000 : rowEndMs
+                const rStart = msFor(dayISO, rawStart)
+                const rEnd0 = msFor(dayISO, rawEnd)
+                const rEnd = isOvernight(rawStart, rawEnd) ? rEnd0 + 24 * 60 * 60 * 1000 : rEnd0
 
                 let bestIdx = -1
                 let bestOv = -1
-
                 for (let i = 0; i < slots.length; i++) {
                     const s = slots[i]
-                    const sStartMs = msFor(dayISO, s.start_time)
-                    const sEndBase = msFor(isOvernight(s.start_time, s.end_time) ? dayISO : dayISO, s.end_time)
-                    const sEndMs   = isOvernight(s.start_time, s.end_time) ? sEndBase + 24 * 60 * 60 * 1000 : sEndBase
-                    const ov = overlapMs(rowStartMs, rowEndFixed, sStartMs, sEndMs)
+                    const sStart = msFor(dayISO, s.start_time)
+                    const sEnd0 = msFor(dayISO, s.end_time)
+                    const sEnd = isOvernight(s.start_time, s.end_time) ? sEnd0 + 24 * 60 * 60 * 1000 : sEnd0
+                    const ov = overlapMs(rStart, rEnd, sStart, sEnd)
                     if (ov > bestOv) {
-                    bestOv = ov
                     bestIdx = i
+                    bestOv = ov
                     }
                 }
 
                 if (bestIdx >= 0 && bestOv > 0) {
-                    const best = slots[bestIdx]
-                    displayStart = hhmm(best.start_time)
-                    displayEnd   = hhmm(best.end_time)
+                    const s = slots[bestIdx]
+                    startHM = hhmm(s.start_time)
+                    endHM = hhmm(s.end_time)
                 }
                 }
+
+                const timeSlot = dayISO && startHM && endHM ? `${dayISO} ${startHM} → ${dayISO} ${endHM}` : ""
 
                 return (
                 <tr key={`${it.mission_id}-${it.slot_date}-${it.start_time}`}>
                     <td className="border p-2">{it.mission_name}</td>
-                    <td className="border p-2">{dayISO}</td>
-                    <td className="border p-2">{displayStart}</td>
-                    <td className="border p-2">{displayEnd}</td>
+                    <td className="border p-2">{timeSlot}</td>
                     <td className="border p-2">
-                    {it.fellow_soldiers && it.fellow_soldiers.length > 0 ? it.fellow_soldiers.join(", ") : ""}
+                    {it.fellow_soldiers?.length ? it.fellow_soldiers.join(", ") : ""}
                     </td>
                 </tr>
                 )
