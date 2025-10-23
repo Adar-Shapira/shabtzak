@@ -261,23 +261,27 @@ def reassign_assignment(body: ReassignRequest, db: Session = Depends(get_db)):
     if not s:
         raise HTTPException(status_code=404, detail="Soldier not found")
 
+    # NEW: default to None so it's always defined
+    warning_restriction: str | None = None
+
     # keep your restriction check
     if a.mission_id:
-        restricted = db.query(SoldierMissionRestriction).filter(
-            SoldierMissionRestriction.soldier_id == s.id,
-            SoldierMissionRestriction.mission_id == a.mission_id,
-        ).first()
+        restricted = (
+            db.query(SoldierMissionRestriction)
+              .filter(
+                  SoldierMissionRestriction.soldier_id == s.id,
+                  SoldierMissionRestriction.mission_id == a.mission_id,
+              )
+              .first()
+        )
         if restricted:
             if not body.ignore_rules:
                 raise HTTPException(status_code=400, detail="Soldier is restricted from this mission")
             # forced: record a soft warning and continue
             warning_restriction = "IGNORED: soldier is restricted from this mission"
-    else:
-        warning_restriction = None
 
     # If forcing, automatically clear overlapping assignments for this soldier
     if body.ignore_rules:
-        # any assignment for this soldier that overlaps [a.start_at, a.end_at)
         overlapping = (
             db.query(Assignment)
               .filter(
@@ -289,7 +293,7 @@ def reassign_assignment(body: ReassignRequest, db: Session = Depends(get_db)):
               .all()
         )
         for ov in overlapping:
-            ov.soldier_id = None  # unassign conflicting slot instead of failing
+            ov.soldier_id = None
             db.add(ov)
 
     a.soldier_id = s.id
@@ -301,8 +305,7 @@ def reassign_assignment(body: ReassignRequest, db: Session = Depends(get_db)):
         db.rollback()
         if not body.ignore_rules:
             raise HTTPException(status_code=400, detail="Cannot reassign due to a DB constraint") from e
-        # As a fallback while forcing, try again after clearing conflicts found mid-transaction
-        # (this is defensive; usually step above already cleared conflicts)
+        # defensive retry after clearing conflicts
         overlapping = (
             db.query(Assignment)
               .filter(
@@ -322,8 +325,9 @@ def reassign_assignment(body: ReassignRequest, db: Session = Depends(get_db)):
 
     db.refresh(a)
 
+    # (optional) if you want local tz here, use LOCAL_TZ instead of timezone.utc
     start_local = a.start_at.astimezone(timezone.utc).isoformat()
-    end_local = a.end_at.astimezone(timezone.utc).isoformat()
+    end_local   = a.end_at.astimezone(timezone.utc).isoformat()
 
     return {
         "id": a.id,
@@ -337,7 +341,8 @@ def reassign_assignment(body: ReassignRequest, db: Session = Depends(get_db)):
         "end_local": end_local,
         "start_epoch_ms": int(a.start_at.timestamp() * 1000),
         "end_epoch_ms": int(a.end_at.timestamp() * 1000),
-        "warnings": [w for w in [warning_restriction] if w],
+        # NEW: build the list only if we have a message
+        "warnings": ([warning_restriction] if warning_restriction else []),
     }
 
 class CreateAssignmentRequest(BaseModel):

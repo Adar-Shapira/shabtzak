@@ -259,6 +259,8 @@ export default function Planner() {
 
   const [rowsForWarnings, setRowsForWarnings] = useState<FlatRosterItem[]>([]);
 
+  const [soldiersById, setSoldiersById] = useState<Map<number, Soldier>>(new Map());
+
   const warningsByAssignmentId = useMemo(() => {
   const map = new Map<number, PlannerWarning[]>();
   for (const w of warnings) {
@@ -369,7 +371,18 @@ export default function Planner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [day]);
 
-
+  useEffect(() => {
+    (async () => {
+      try {
+        const all = await listSoldiers();
+        const m = new Map<number, Soldier>();
+        for (const s of all) m.set(s.id, s);
+        setSoldiersById(m);
+      } catch {
+        setSoldiersById(new Map());
+      }
+    })();
+  }, []);
 
 async function runPlanner() {
   deletePlanForDay();
@@ -807,6 +820,140 @@ async function shufflePlanner() {
     if (tier === "orange") out.push({ type: "REST", color: "orange" });
 
     return out;
+  }
+
+  // Replace your current getRestrictionRawList / getRestrictedMissionNames / getRestrictedMissionIds with this:
+
+  function normalize(s?: string | null) {
+    return (s || "").trim().toLowerCase();
+  }
+
+  function splitTokens(s: string): string[] {
+    return s
+      .replace(/;/g, ",")
+      .split(",")
+      .map(t => normalize(t))
+      .filter(Boolean);
+  }
+
+  /** Collect restriction “atoms” from many shapes; split strings into tokens; include *_ids too. */
+  function getRestrictionRawList(s?: Soldier | null): any[] {
+    if (!s) return [];
+    const out: any[] = [];
+
+    const push = (v: any) => {
+      if (v == null) return;
+      if (Array.isArray(v)) {
+        out.push(...v);
+      } else if (typeof v === "string") {
+        // split comma/semicolon strings into individual tokens
+        out.push(...splitTokens(v));
+      } else {
+        out.push(v);
+      }
+    };
+
+    // strings/arrays we may have
+    push((s as any).restriction);
+    push((s as any).restrictions);
+    push((s as any).restrictions_tokens);       // already array of tokens
+    push((s as any).restricted_missions);
+    push((s as any).mission_restrictions);
+    push((s as any).mission_restriction_ids);   // may be an array of numbers
+
+    // nested object we’ve seen in a few shapes
+    push((s as any).restrictions?.missions);
+
+    return out;
+  }
+
+  function getRestrictedMissionNames(s?: Soldier | null): string[] {
+    return getRestrictionRawList(s)
+      .map(x => {
+        if (!x) return "";
+        if (typeof x === "string") return normalize(x);  // already split above
+        if (typeof x === "object") {
+          return normalize(
+            (x as any).mission_name ??
+            (x as any).name ??
+            (x as any).mission?.name
+          );
+        }
+        return "";
+      })
+      .filter(Boolean);
+  }
+
+  function getRestrictedMissionIds(s?: Soldier | null): number[] {
+    return getRestrictionRawList(s)
+      .map(x => {
+        if (typeof x === "number") return x;
+        if (typeof x === "string") {
+          const n = Number(x);
+          return Number.isFinite(n) ? n : null;
+        }
+        if (x && typeof x === "object") {
+          const cand =
+            (x as any).mission_id ??
+            (x as any).missionId ??
+            (x as any).mission?.id ??
+            (x as any).id;
+          const n = Number(cand);
+          return Number.isFinite(n) ? n : null;
+        }
+        return null;
+      })
+      .filter((n): n is number => n != null);
+  }
+
+  /** True if the row’s mission is restricted for its soldier (by name or id, id has fallback via allMissions). */
+  function isRowRestricted(row: FlatRosterItem): boolean {
+    if (!row?.soldier_id) return false;
+    const s = soldiersById.get(row.soldier_id);
+    if (!s) return false;
+
+    const restrictedNames = getRestrictedMissionNames(s);
+    const restrictedIds   = getRestrictedMissionIds(s);
+
+    const missionName = normalize(row?.mission?.name ?? "");
+    let missionId: number | null = row?.mission?.id ?? null;
+
+    // If row has no id but soldier has id restrictions, derive id by name
+    if (missionId == null && missionName && restrictedIds.length > 0) {
+      const m = allMissions.find(mm => normalize(mm.name ?? "") === missionName);
+      if (m?.id != null) missionId = m.id;
+    }
+
+    const nameHit = missionName && restrictedNames.includes(missionName);
+    const idHit   = missionId != null && restrictedIds.includes(missionId);
+
+    return !!(nameHit || idHit);
+  }
+
+  /** Extract a soldier's restricted mission names as lowercase strings. */
+  function getRestrictedMissions(s?: Soldier | null): string[] {
+    if (!s) return [];
+    const any = (s as any).restriction ?? (s as any).restrictions ?? [];
+    if (Array.isArray(any)) {
+      // array of strings or objects
+      return any
+        .map((x) => {
+          if (typeof x === "string") return normalize(x);
+          if (x && typeof x === "object") {
+            // common shapes: { mission_name: "Patrol" } or { name: "Patrol" }
+            return normalize((x as any).mission_name ?? (x as any).name);
+          }
+          return "";
+        })
+        .filter(Boolean);
+    }
+    // single string
+    if (typeof any === "string") return [normalize(any)];
+    // single object
+    if (any && typeof any === "object") {
+      return [normalize((any as any).mission_name ?? (any as any).name)];
+    }
+    return [];
   }
 
   async function openChangeModal(assignmentId: number, roleName: string | null) {
@@ -2138,6 +2285,8 @@ function formatWarningDetails(w: PlannerWarning): string {
                         <React.Fragment key={slot.key}>
                           {slotDivider}
                           {rowsForSlot.map((r, idx) => {
+                            
+                            // ⛳ ANCHOR: merge RESTRICTED pill into Assignments->Warnings
                             const apiWarnings = warningsByAssignmentId.get(r.id) || [];
 
                             const coloredApi: Array<{ type: string; color?: "red" | "orange" | "gray" }> =
@@ -2148,7 +2297,17 @@ function formatWarningDetails(w: PlannerWarning): string {
                                 })
                               );
 
-                            const pillItems = coloredApi.length ? coloredApi : pillItemsForRow(r);
+                            // if there are API pills we use them; if not, we fall back to local overlap/rest
+                            const basePills =
+                              coloredApi.length > 0 ? coloredApi : pillItemsForRow(r);
+
+                            // add RESTRICTED (orange) if the soldier is restricted for this mission
+                            const restrictedPill = isRowRestricted(r)
+                              ? [{ type: "RESTRICTED", color: "orange" } as const]
+                              : [];
+
+                            // final set (WarningsCell already dedups)
+                            const pillItems = [...basePills, ...restrictedPill];
 
                             return (
                               <tr key={`${slot.key}__${r.id}`}>

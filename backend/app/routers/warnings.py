@@ -64,8 +64,6 @@ restricted_cte AS (
   JOIN soldier_mission_restrictions r
     ON r.soldier_id = b.soldier_id
    AND r.mission_id = b.mission_id
-  -- only warn for assignments that START on the selected day in APP_TZ
-  WHERE ((b.start_at AT TIME ZONE 'UTC' AT TIME ZONE :tz)::date = :day_date)
 )
 SELECT
   'RESTRICTED' AS type,

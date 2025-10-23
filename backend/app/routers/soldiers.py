@@ -11,7 +11,13 @@ from app.models.role import Role
 from app.models.department import Department
 from app.models.soldier_role import SoldierRole
 from app.models.assignment import Assignment                 
-from app.models.vacation import Vacation                     
+from app.models.vacation import Vacation    
+
+from sqlalchemy.orm import selectinload
+
+from sqlalchemy.orm import selectinload, joinedload  # add this import
+from app.models.soldier_mission_restriction import SoldierMissionRestriction  # add
+from app.models.mission import Mission  # optional, but nice to have the type
 
 
 router = APIRouter(prefix="/soldiers", tags=["soldiers"])
@@ -53,7 +59,70 @@ class SoldierUpdate(BaseModel):
 @router.get("")
 def list_soldiers():
     with SessionLocal() as s:
-        rows = s.execute(select(Soldier).order_by(Soldier.id)).scalars().all()
+        rows = (
+            s.execute(
+                select(Soldier)
+                .options(
+                    selectinload(Soldier.roles),
+                    selectinload(Soldier.department),
+                    # Eager-load the restriction rows AND their mission to avoid detached access
+                    selectinload(Soldier.mission_restrictions).selectinload(
+                        SoldierMissionRestriction.mission
+                    ),
+                )
+                .order_by(Soldier.id)
+            )
+            .scalars()
+            .all()
+        )
+
+        out = []
+        for x in rows:
+            out.append({
+                "id": x.id,
+                "name": x.name,
+                "roles": [{"id": r.id, "name": r.name} for r in (x.roles or [])],
+                "department_id": x.department_id,
+                "department_name": x.department.name if x.department else None,
+
+                # keep original string field
+                "restrictions": x.restrictions,
+                "restrictions_tokens": [
+                    t.strip()
+                    for t in x.restrictions.replace(";", ",").split(",")
+                    if t.strip()
+                ],
+
+                # IMPORTANT: return only scalars, never ORM objects
+                "mission_restrictions": [
+                    {
+                        "mission_id": mr.mission_id,
+                        "mission_name": (mr.mission.name if mr.mission else None),
+                    }
+                    for mr in (x.mission_restrictions or [])
+                ],
+                "mission_restriction_ids": [
+                    mr.mission_id for mr in (x.mission_restrictions or [])
+                ],
+
+                "missions_history": x.missions_history,
+            })
+        return out
+    
+    with SessionLocal() as s:
+        rows = (
+            s.execute(
+                select(Soldier)
+                .options(
+                    selectinload(Soldier.roles),
+                    selectinload(Soldier.department),
+                    selectinload(Soldier.mission_restrictions).selectinload("mission")
+                )
+                .order_by(Soldier.id)
+            )
+            .scalars()
+            .all()
+        )
         out = []
         for x in rows:
             out.append({
@@ -64,7 +133,15 @@ def list_soldiers():
                 "department_name": x.department.name if x.department else None,
                 "restrictions": x.restrictions,
                 "restrictions_tokens": [t.strip() for t in x.restrictions.replace(";", ",").split(",") if t.strip()],
-                "missions_history": x.missions_history
+                "mission_restrictions": [
+                    {
+                        "mission_id": mr.mission_id,
+                        "mission_name": (mr.mission.name if mr.mission else None),
+                    }
+                    for mr in (x.mission_restrictions or [])
+                ],
+                "mission_restriction_ids": [mr.mission_id for mr in (x.mission_restrictions or [])],
+                "missions_history": x.missions_history,
             })
         return out
 
