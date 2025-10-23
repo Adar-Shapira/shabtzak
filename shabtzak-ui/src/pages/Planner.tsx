@@ -863,11 +863,12 @@ async function shufflePlanner() {
       );
 
       // Also refresh from server, in case slot groupings/times changed
-      await loadAllAssignments();
-
-      // IMPORTANT: refresh warnings for the currently selected day
-      await loadWarnings(day);
-      await loadDayRosterForWarnings(day);
+      await withPreservedScroll(async () => {
+        await loadAllAssignments();
+        // IMPORTANT: refresh warnings for the currently selected day
+        await loadWarnings(day);
+        await loadDayRosterForWarnings(day);
+      });
 
       setIsChangeOpen(false);
       setPendingAssignmentId(null);
@@ -895,9 +896,12 @@ async function shufflePlanner() {
         )
       );
 
-      await loadAllAssignments();
-      await loadWarnings(day);
-      await loadDayRosterForWarnings(day);
+      await withPreservedScroll(async () => {
+        await loadAllAssignments();
+        await loadWarnings(day);
+        await loadDayRosterForWarnings(day);
+      });
+
 
       setIsChangeOpen(false);
       setPendingAssignmentId(null);
@@ -1174,6 +1178,19 @@ async function shufflePlanner() {
   // Basic interval overlap check
   function overlaps(aStart: number, aEnd: number, bStart: number, bEnd: number): boolean {
     return aStart < bEnd && aEnd > bStart;
+  }
+
+  // Preserve page scroll while we do async refreshes that cause heavy re-rendering
+  async function withPreservedScroll<T>(fn: () => Promise<T>): Promise<T> {
+    const x = window.scrollX;
+    const y = window.scrollY;
+    try {
+      const out = await fn();
+      return out;
+    } finally {
+      // Restore on the next frame so layout is ready
+      requestAnimationFrame(() => window.scrollTo(x, y));
+    }
   }
 
   function nextDayISO(dayISO: string) {
