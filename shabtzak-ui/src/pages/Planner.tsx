@@ -183,6 +183,49 @@ function guessRoleFromMissionName(missionName?: string | null): string | null {
 // Falls back to APP_TZ formatting if no slot overlaps.
 const fmtWarn = (iso: string) => formatYMDHM(iso, APP_TZ);
 
+function WarningPill({ type, color }: { type: string; color?: "red" | "orange" | "gray" }) {
+  const style =
+    color === "red"
+      ? { color: "crimson" }
+      : color === "orange"
+      ? { color: "#d97706" } // orange-600 used in modal
+      : { color: "#374151" }; // gray-700 fallback (for RESTRICTED)
+
+  return (
+    <span
+      style={{
+        ...style,
+        border: "1px solid currentColor",
+        borderRadius: 4,
+        padding: "1px 6px",
+        fontSize: "0.85em",
+        fontWeight: 600,
+        display: "inline-block",
+        lineHeight: 1.3,
+      }}
+    >
+      {type}
+    </span>
+  );
+}
+
+function WarningsCell({ items }: { items: Array<{ type: string; color?: "red" | "orange" | "gray" }> }) {
+  if (!items || items.length === 0) return null;
+  // Deduplicate by TYPE+COLOR so orange/red REST both show if ever mixed
+  const uniq = new Map<string, { type: string; color?: "red" | "orange" | "gray" }>();
+  for (const it of items) {
+    const key = `${it.type}__${it.color ?? "none"}`;
+    if (!uniq.has(key)) uniq.set(key, it);
+  }
+  return (
+    <div className="flex flex-wrap gap-1">
+      {Array.from(uniq.values()).map((it, i) => (
+        <WarningPill key={`${it.type}-${it.color ?? "none"}-${i}`} type={it.type} color={it.color} />
+      ))}
+    </div>
+  );
+}
+
 export default function Planner() {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const [day, setDay] = useState<string>(today);
@@ -215,6 +258,19 @@ export default function Planner() {
   const [warnError, setWarnError] = useState<string | null>(null)
 
   const [rowsForWarnings, setRowsForWarnings] = useState<FlatRosterItem[]>([]);
+
+  const warningsByAssignmentId = useMemo(() => {
+  const map = new Map<number, PlannerWarning[]>();
+  for (const w of warnings) {
+    // Only attach warnings that point to a concrete assignment on this day
+    if (w.assignment_id != null) {
+      const arr = map.get(w.assignment_id) || [];
+      arr.push(w);
+      map.set(w.assignment_id, arr);
+    }
+  }
+  return map;
+}, [warnings]);
 
   // Available Soldiers modal state
   const [isAvailOpen, setIsAvailOpen] = useState(false);
@@ -724,6 +780,33 @@ async function shufflePlanner() {
     if (minGap < H16) return "orange";
     if (minGap > H20) return "green";
     return null;
+  }
+
+  function pillItemsForRow(row: FlatRosterItem): Array<{ type: string; color?: "red" | "orange" | "gray" }> {
+    if (!row.soldier_id) return [];
+
+    const curStart = (row as any).start_epoch_ms ?? new Date(row.start_at).getTime();
+    const curEnd   = (row as any).end_epoch_ms   ?? new Date(row.end_at).getTime();
+    if (!(Number.isFinite(curStart) && Number.isFinite(curEnd))) return [];
+
+    const mine = rowsForWarnings
+      .filter(r => r.soldier_id === row.soldier_id)
+      .map(r => ({
+        id: r.id,
+        s: (r as any).start_epoch_ms ?? new Date(r.start_at).getTime(),
+        e: (r as any).end_epoch_ms   ?? new Date(r.end_at).getTime(),
+      }))
+      .filter(it => Number.isFinite(it.s) && Number.isFinite(it.e));
+
+    const hasOverlap = mine.some(it => it.id !== row.id && curStart < it.e && curEnd > it.s);
+    const tier = restTierForRow(row); // "red" | "orange" | "green" | null
+
+    const out: Array<{ type: string; color?: "red" | "orange" | "gray" }> = [];
+    if (hasOverlap) out.push({ type: "OVERLAP", color: "red" });
+    if (tier === "red") out.push({ type: "REST", color: "red" });
+    if (tier === "orange") out.push({ type: "REST", color: "orange" });
+
+    return out;
   }
 
   async function openChangeModal(assignmentId: number, roleName: string | null) {
@@ -1717,6 +1800,7 @@ function formatWarningDetails(w: PlannerWarning): string {
                   <th className="border p-2 text-left">Soldier</th>
                   <th className="border p-2 text-left">Mission</th>
                   <th className="border p-2 text-left">Time Slot</th>
+                  <th className="border p-2 text-left">Warnings</th>
                   <th className="border p-2 text-left">Details</th>
                 </tr>
               </thead>
@@ -1727,6 +1811,21 @@ function formatWarningDetails(w: PlannerWarning): string {
                     <td className="border p-2">{w.soldier_name}</td>
                     <td className="border p-2">{w.mission_name}</td>
                     <td className="border p-2">{renderWarningTimeSlot(w)}</td>
+                    <td className="border p-2">
+                      <WarningsCell
+                        items={[
+                          {
+                            type: w.type,
+                            color:
+                              w.type === "OVERLAP"
+                                ? "red"
+                                : w.type === "REST"
+                                ? "red"
+                                : "gray", // RESTRICTED -> gray
+                          } as const,
+                        ]}
+                      />
+                    </td>
                     <td className="border p-2">{formatWarningDetails(w)}</td>
                   </tr>
                 ))}
@@ -1851,6 +1950,7 @@ function formatWarningDetails(w: PlannerWarning): string {
                   <th className="text-left p-2 border w-[260px]">Time Slot</th>
                   <th className="text-left p-2 border">Role</th>
                   <th className="text-left p-2 border">Soldier</th>
+                  <th className="text-left p-2 border">Warnings</th>
                 </tr>
               </thead>
               <tbody>
@@ -1859,7 +1959,7 @@ function formatWarningDetails(w: PlannerWarning): string {
                     {/* Mission divider (skip before the first mission) */}
                     {gIdx > 0 && (
                       <tr aria-hidden>
-                        <td colSpan={4} style={{ padding: 0 }}>
+                        <td colSpan={5} style={{ padding: 0 }}>
                           <div
                             style={{
                               height: 1,
@@ -1879,7 +1979,7 @@ function formatWarningDetails(w: PlannerWarning): string {
                       const slotDivider =
                         sIdx > 0 ? (
                           <tr key={`ssep-${gIdx}-${sIdx}`} aria-hidden>
-                            <td colSpan={4} style={{ padding: 0 }}>
+                            <td colSpan={5} style={{ padding: 0 }}>
                               <div
                                 style={{
                                   height: 1,
@@ -1893,29 +1993,22 @@ function formatWarningDetails(w: PlannerWarning): string {
                         ) : null;
 
                       const missionCell = (
-                        <td
-                          className="align-top p-2 border bg-gray-50"
-                          rowSpan={rowsForSlot.length || 1}
-                        >
+                        <td className="align-top p-2 border bg-gray-50" rowSpan={rowsForSlot.length || 1}>
                           <div className="font-semibold">{g.missionName || "—"}</div>
                         </td>
                       );
 
                       const timeCell = (
-                        <td
-                          className="align-top p-2 border bg-gray-50"
-                          rowSpan={rowsForSlot.length || 1}
-                        >
+                        <td className="align-top p-2 border bg-gray-50" rowSpan={rowsForSlot.length || 1}>
                           <div className="text-xs text-gray-600">
                             {slot.startLabel} → {slot.endLabel}
                           </div>
                         </td>
                       );
 
-                      // EMPTY SLOT (seeded by mission/slot config)
+                      // EMPTY SLOT
                       if (rowsForSlot.length === 0) {
-                        const reqMeta =
-                          g.missionId != null ? requirementsByMission.get(g.missionId) : undefined;
+                        const reqMeta = g.missionId != null ? requirementsByMission.get(g.missionId) : undefined;
                         const reqs = reqMeta?.requirements ?? [];
                         const explicitCount = reqs.reduce((sum, r) => sum + reqCount(r), 0);
                         const totalNeeded = reqMeta?.total_needed ?? 0;
@@ -1928,34 +2021,28 @@ function formatWarningDetails(w: PlannerWarning): string {
                               {missionCell}
                               {timeCell}
 
+                              {/* Role column (derived) */}
                               {(() => {
-                                    // Decide a display role for the empty slot
-                                    const activeReqs = (reqs || []).filter((r) => reqCount(r) > 0);
-                                    let displayRoleName: string | null = null;
+                                const activeReqs = (reqs || []).filter((r) => reqCount(r) > 0);
+                                let displayRoleName: string | null = null;
 
-                                    if (activeReqs.length === 1) {
-                                      // exactly one explicit role required
-                                      displayRoleName = reqRoleName(activeReqs[0]);
-                                    } else if (activeReqs.length === 0) {
-                                      // no explicit role – try to infer from the mission name (e.g., "Base Officer" -> "Officer")
-                                      displayRoleName = guessRoleFromMissionName(g.missionName);
-                                      // if nothing inferred but there are generic slots, show "Any"
-                                      if (!displayRoleName && genericSlots > 0) displayRoleName = "Any";
-                                    }
+                                if (activeReqs.length === 1) {
+                                  displayRoleName = reqRoleName(activeReqs[0]);
+                                } else if (activeReqs.length === 0) {
+                                  displayRoleName = guessRoleFromMissionName(g.missionName);
+                                  if (!displayRoleName && genericSlots > 0) displayRoleName = "Any";
+                                }
+                                return <td className="p-2 border">{displayRoleName ?? "—"}</td>;
+                              })()}
 
-                                    return (
-                                      // Role column (now shows the derived role)
-                                      <td className="p-2 border">{displayRoleName ?? "—"}</td>
-                                    );
-                                  })()}
-
-                              {/* Soldier column with "No assignees" + Change button */}
+                              {/* Soldier column */}
                               <td className="p-2 border">
                                 <div className="flex items-center gap-2">
-                                  <span className="italic text-gray-500" style={{ color: "crimson" }}>Unassigned</span>
+                                  <span className="italic text-gray-500" style={{ color: "crimson" }}>
+                                    Unassigned
+                                  </span>
 
                                   {(() => {
-                                    // If exactly one explicit role is required, open the modal filtered to that role.
                                     const activeReqs = (reqs || []).filter((r) => reqCount(r) > 0);
                                     const singleRoleReq = activeReqs.length === 1 ? activeReqs[0] : null;
                                     const singleRoleName = singleRoleReq ? reqRoleName(singleRoleReq) : null;
@@ -1972,7 +2059,7 @@ function formatWarningDetails(w: PlannerWarning): string {
                                             g.missionId,
                                             slot.startLabel,
                                             slot.endLabel,
-                                            singleRoleName,   // filter if exactly one role is required
+                                            singleRoleName,
                                             singleRoleId
                                           )
                                         }
@@ -1983,7 +2070,6 @@ function formatWarningDetails(w: PlannerWarning): string {
                                   })()}
                                 </div>
 
-                                {/* Optional: keep the role-specific quick-assign actions below */}
                                 {(reqs.length > 0 || genericSlots > 0) && (
                                   <div className="mt-2 flex flex-wrap gap-6 items-center">
                                     {reqs.map((r, idx) => {
@@ -2017,9 +2103,7 @@ function formatWarningDetails(w: PlannerWarning): string {
 
                                     {genericSlots > 0 && (
                                       <div className="flex items-center gap-2">
-                                        <span className="text-sm text-gray-600">
-                                          Generic × {genericSlots}
-                                        </span>
+                                        <span className="text-sm text-gray-600">Generic × {genericSlots}</span>
                                         <button
                                           type="button"
                                           className="border rounded px-2 py-1"
@@ -2041,61 +2125,78 @@ function formatWarningDetails(w: PlannerWarning): string {
                                   </div>
                                 )}
                               </td>
+
+                              {/* Warnings column for empty slot */}
+                              <td className="p-2 border">{/* empty */}</td>
                             </tr>
                           </React.Fragment>
                         );
                       }
 
-                      // NON-EMPTY SLOT (render actual assignments)
+                      // NON-EMPTY SLOT
                       return (
                         <React.Fragment key={slot.key}>
                           {slotDivider}
-                          {rowsForSlot.map((r, idx) => (
-                            <tr key={`${slot.key}__${r.id}`}>
-                              {idx === 0 && missionCell}
-                              {idx === 0 && timeCell}
-                              <td className="p-2 border">{r.role ?? ""}</td>
-                                                            <td className="border">
-                                <div className="flex items-center gap-2">
-                                  {(() => {
-                                    if (!r.soldier_id || !r.soldier_name) {
-                                      return <span style={{ color: "crimson" }}>Unassigned</span>;
-                                    }
-                                    const tier = restTierForRow(r); // "red" | "orange" | "green" | null
-                                    const style =
-                                      tier === "red"
-                                        ? { color: "crimson", fontWeight: 600 }
-                                        : tier === "orange"
-                                        ? { color: "#d97706", fontWeight: 600 } // orange-600
-                                        : tier === "green"
-                                        ? { color: "#15803d", fontWeight: 600 } // green-700
-                                        : undefined;
-                                    return (
-                                      <button
-                                        type="button"
-                                        onClick={() => openSoldierHistory(r.soldier_id!, r.soldier_name)}
-                                        className="underline"
-                                        style={style}
-                                        title="View Mission History"
-                                      >
-                                        {r.soldier_name}
-                                      </button>
-                                    );
+                          {rowsForSlot.map((r, idx) => {
+                            const apiWarnings = warningsByAssignmentId.get(r.id) || [];
 
-                                  })()}
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      openChangeModal(r.id, r.role)
-                                    }
-                                    className="border rounded px-2 py-1"
-                                  >
-                                    Change
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-                          ))}
+                            const coloredApi: Array<{ type: string; color?: "red" | "orange" | "gray" }> =
+                              apiWarnings.map(
+                                (w): { type: string; color?: "red" | "orange" | "gray" } => ({
+                                  type: w.type,
+                                  color: w.type === "OVERLAP" ? "red" : w.type === "REST" ? "red" : "gray",
+                                })
+                              );
+
+                            const pillItems = coloredApi.length ? coloredApi : pillItemsForRow(r);
+
+                            return (
+                              <tr key={`${slot.key}__${r.id}`}>
+                                {idx === 0 && missionCell}
+                                {idx === 0 && timeCell}
+                                <td className="p-2 border">{r.role ?? ""}</td>
+                                <td className="border">
+                                  <div className="flex items-center gap-2">
+                                    {(() => {
+                                      if (!r.soldier_id || !r.soldier_name) {
+                                        return <span style={{ color: "crimson" }}>Unassigned</span>;
+                                      }
+                                      const tier = restTierForRow(r);
+                                      const style =
+                                        tier === "red"
+                                          ? { color: "crimson", fontWeight: 600 }
+                                          : tier === "orange"
+                                          ? { color: "#d97706", fontWeight: 600 }
+                                          : tier === "green"
+                                          ? { color: "#15803d", fontWeight: 600 }
+                                          : undefined;
+                                      return (
+                                        <button
+                                          type="button"
+                                          onClick={() => openSoldierHistory(r.soldier_id!, r.soldier_name)}
+                                          className="underline"
+                                          style={style}
+                                          title="View Mission History"
+                                        >
+                                          {r.soldier_name}
+                                        </button>
+                                      );
+                                    })()}
+                                    <button
+                                      type="button"
+                                      onClick={() => openChangeModal(r.id, r.role)}
+                                      className="border rounded px-2 py-1"
+                                    >
+                                      Change
+                                    </button>
+                                  </div>
+                                </td>
+                                <td className="p-2 border">
+                                  <WarningsCell items={pillItems} />
+                                </td>
+                              </tr>
+                            );
+                          })}
                         </React.Fragment>
                       );
                     })}

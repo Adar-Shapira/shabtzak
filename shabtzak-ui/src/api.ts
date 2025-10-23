@@ -172,9 +172,10 @@ export type PlannerWarning = {
   soldier_name: string;
   mission_id: number;
   mission_name: string;
-  start_at: string; // server-formatted local string
-  end_at: string;   // server-formatted local string
+  start_at: string;
+  end_at: string;
   details: string | null;
+  assignment_id?: number | null; // NEW
 };
 
 // UPDATED: now accepts the plan day and sends it as a query param

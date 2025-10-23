@@ -14,3 +14,4 @@ class WarningItem(BaseModel):
     start_at: str
     end_at: str
     details: Optional[str] = None
+    assignment_id: Optional[int] = None

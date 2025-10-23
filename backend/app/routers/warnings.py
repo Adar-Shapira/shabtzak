@@ -75,7 +75,8 @@ SELECT
   m.name AS mission_name,
   (x.start_at AT TIME ZONE 'UTC' AT TIME ZONE :tz) AS start_at_local,
   (x.end_at   AT TIME ZONE 'UTC' AT TIME ZONE :tz) AS end_at_local,
-  NULL::text AS details
+  NULL::text AS details,
+  x.assignment_id AS assignment_id
 FROM restricted_cte x
 JOIN soldiers s ON s.id = x.soldier_id
 JOIN missions m ON m.id = x.mission_id
@@ -91,7 +92,8 @@ SELECT
   (x.start_at AT TIME ZONE 'UTC' AT TIME ZONE :tz) AS start_at_local,
   (x.end_at   AT TIME ZONE 'UTC' AT TIME ZONE :tz) AS end_at_local,
   ('Overlaps with previous assignment ending at ' ||
-   to_char(x.prev_end_at AT TIME ZONE 'UTC' AT TIME ZONE :tz, 'YYYY-MM-DD HH24:MI')) AS details
+   to_char(x.prev_end_at AT TIME ZONE 'UTC' AT TIME ZONE :tz, 'YYYY-MM-DD HH24:MI')) AS details,
+  x.assignment_id AS assignment_id
 FROM overlap_cte x
 JOIN soldiers s ON s.id = x.soldier_id
 JOIN missions m ON m.id = x.mission_id
@@ -107,7 +109,8 @@ SELECT
   (x.start_at AT TIME ZONE 'UTC' AT TIME ZONE :tz) AS start_at_local,
   (x.end_at   AT TIME ZONE 'UTC' AT TIME ZONE :tz) AS end_at_local,
   ('Rest between missions is ' ||
-    to_char((x.start_at - x.prev_end_at), 'HH24:MI')) AS details
+    to_char((x.start_at - x.prev_end_at), 'HH24:MI')) AS details,
+  x.assignment_id AS assignment_id
 FROM rest_cte x
 JOIN soldiers s ON s.id = x.soldier_id
 JOIN missions m ON m.id = x.mission_id
@@ -158,6 +161,7 @@ def get_warnings(
                 start_at=str(r["start_at_local"]),
                 end_at=str(r["end_at_local"]),
                 details=r["details"],
+                assignment_id=r.get("assignment_id"),
             )
         )
     return out
