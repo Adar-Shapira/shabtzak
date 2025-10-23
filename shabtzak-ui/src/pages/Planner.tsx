@@ -646,32 +646,43 @@ async function shufflePlanner() {
     let candStart: number | null = null;
     let candEnd: number | null = null;
 
+    // We'll also figure out the target mission (id/name) for restriction checks
+    let targetMissionId: number | null = null;
+    let targetMissionName: string | null = null;
+
     if (pendingAssignmentId) {
       const target = rows.find(r => r.id === pendingAssignmentId);
       if (!target) return [];
       candStart = (target as any).start_epoch_ms ?? new Date(target.start_at).getTime();
       candEnd   = (target as any).end_epoch_ms   ?? new Date(target.end_at).getTime();
+
+      targetMissionId = target.mission?.id ?? null;
+      targetMissionName = target.mission?.name ?? null;
     } else if (pendingEmptySlot) {
-      // Use the local ISO window captured when the empty-slot modal was opened
       candStart = new Date(pendingEmptySlot.startLocalIso).getTime();
       candEnd   = new Date(pendingEmptySlot.endLocalIso).getTime();
+
+      targetMissionId = pendingEmptySlot.missionId ?? null;
+      if (targetMissionId != null) {
+        const m = allMissions.find(mm => mm.id === targetMissionId);
+        targetMissionName = m?.name ?? null;
+      }
     } else {
       return [];
     }
 
     if (candStart == null || candEnd == null) return [];
 
-    // Use the day-roster set that includes overnight overlaps
     const existing = rowsForWarnings.filter(r => r.soldier_id === s.id);
 
-    // 1) OVERLAP: intersects any existing interval?
+    // 1) OVERLAP
     const hasOverlap = existing.some(r => {
       const sMs = (r as any).start_epoch_ms ?? new Date(r.start_at).getTime();
       const eMs = (r as any).end_epoch_ms   ?? new Date(r.end_at).getTime();
       return candStart! < eMs && candEnd! > sMs;
     });
 
-    // 2) REST tiers: compute minimum non-negative gap adjacent to the candidate
+    // 2) REST tiers
     const intervals = existing
       .map(r => ({
         start: (r as any).start_epoch_ms ?? new Date(r.start_at).getTime(),
@@ -682,7 +693,6 @@ async function shufflePlanner() {
 
     const H8 = 8 * 60 * 60 * 1000;
     const H16 = 16 * 60 * 60 * 1000;
-    const H20 = 20 * 60 * 60 * 1000;
 
     let minPositiveGap = Number.POSITIVE_INFINITY;
     for (let i = 0; i < intervals.length - 1; i++) {
@@ -696,19 +706,16 @@ async function shufflePlanner() {
 
     const out: Array<{ text: string; color: "red" | "orange" }> = [];
 
-    if (hasOverlap) {
-      out.push({ text: "OVERLAP", color: "red" });
+    if (hasOverlap) out.push({ text: "OVERLAP", color: "red" });
+
+    if (Number.isFinite(minPositiveGap)) {
+      if (minPositiveGap < H8) out.push({ text: "REST", color: "red" });
+      else if (minPositiveGap < H16) out.push({ text: "REST", color: "orange" });
     }
 
-    // REST warnings:
-    //   < 8h   => red
-    //   8–16h  => orange
-    if (Number.isFinite(minPositiveGap)) {
-      if (minPositiveGap < H8) {
-        out.push({ text: "REST", color: "red" });
-      } else if (minPositiveGap < H16) {
-        out.push({ text: "REST", color: "orange" });
-      }
+    // 3) RESTRICTED (orange) — based on the target mission of this slot
+    if (isSoldierRestrictedForMission(s, targetMissionId, targetMissionName)) {
+      out.push({ text: "RESTRICTED", color: "orange" });
     }
 
     return out;
@@ -954,6 +961,33 @@ async function shufflePlanner() {
       return [normalize((any as any).mission_name ?? (any as any).name)];
     }
     return [];
+  }
+
+  function isSoldierRestrictedForMission(
+    s: Soldier,
+    missionId?: number | null,
+    missionName?: string | null
+  ): boolean {
+    const name = normalize(missionName);
+    const ids = new Set(getRestrictedMissionIds(s));        // supports numeric IDs if present
+    const names = new Set(getRestrictedMissionNames(s));    // supports objects/strings in various shapes
+
+    // Also consider simple tokens returned by /soldiers (restrictions_tokens)
+    const tokens = ((s as any).restrictions_tokens as string[] | undefined) || [];
+    for (const t of tokens) names.add(normalize(t));
+
+    // If we only have a name and no id, try to resolve id from allMissions
+    let mid = missionId ?? null;
+    if (mid == null && name) {
+      const m = allMissions.find(mm => normalize(mm.name ?? "") === name);
+      if (m?.id != null) mid = m.id;
+    }
+
+    // Match by id or name
+    if (mid != null && ids.has(mid)) return true;
+    if (name && names.has(name)) return true;
+
+    return false;
   }
 
   async function openChangeModal(assignmentId: number, roleName: string | null) {
