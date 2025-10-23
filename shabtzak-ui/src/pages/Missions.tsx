@@ -94,15 +94,15 @@ function MissionRequirementsEditor({ missionId, roles, initialTotal }: { mission
   return (
     <div style={{ marginTop: 12, border: "1px solid #e5e7eb", borderRadius: 8, padding: 12 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-        <strong>Requirements</strong>
+        <strong>דרישות</strong>
         <span style={{ fontSize: 12, opacity: 0.8 }}>
-          sum: {sum}
+          סהכ: {sum}
           {typeof total === "number" ? ` / ${total}` : ""}
         </span>
       </div>
 
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
-        <label style={{ fontSize: 14, width: 120 }}>Total needed:</label>
+        <label style={{ fontSize: 14, width: 120 }}>סה"כ חיילים:</label>
         <input
           type="number"
           min={1}
@@ -112,7 +112,7 @@ function MissionRequirementsEditor({ missionId, roles, initialTotal }: { mission
           placeholder="e.g. 8"
         />
         {typeof total === "number" && sum > total && (
-          <span style={{ fontSize: 12, color: "crimson" }}>Sum exceeds total</span>
+          <span style={{ fontSize: 12, color: "crimson" }}>חריגה מכמות החיילים</span>
         )}
       </div>
 
@@ -124,7 +124,7 @@ function MissionRequirementsEditor({ missionId, roles, initialTotal }: { mission
               onChange={(e) => updateRow(idx, { role_id: e.target.value === "" ? "" : Number(e.target.value) })}
               style={{ border: "1px solid #ddd", borderRadius: 6, padding: "4px 8px" }}
             >
-              <option value="">Select role…</option>
+              <option value="">בחר תפקיד</option>
               {roles.map((r) => (
                 <option key={r.id} value={r.id}>
                   {r.name}
@@ -136,20 +136,20 @@ function MissionRequirementsEditor({ missionId, roles, initialTotal }: { mission
               min={1}
               value={row.count}
               onChange={(e) => updateRow(idx, { count: e.target.value === "" ? "" : Number(e.target.value) })}
-              placeholder="count"
+              placeholder="כמות"
               style={{ border: "1px solid #ddd", borderRadius: 6, padding: "4px 8px", width: 100 }}
             />
             <button onClick={() => removeRow(idx)} style={{ color: "crimson" }}>
-              Remove
+              הסר
             </button>
           </div>
         ))}
-        <button onClick={addRow}>+ Add role</button>
+        <button onClick={addRow}>הוסף תפקיד +</button>
       </div>
 
       <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
         <button onClick={save} disabled={loading}>
-          {loading ? "Saving…" : "Save"}
+          {loading ? "בשמירה..." : "שמור"}
         </button>
         {err && <span style={{ color: "crimson", fontSize: 12 }}>{err}</span>}
       </div>
@@ -320,17 +320,17 @@ export default function MissionsPage() {
   return (
     <div style={{ maxWidth: 1100, margin: "24px auto", padding: 16 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h1>Missions</h1>
+        <h1>משימות</h1>
         <button onClick={addDlg.open} style={{ padding: "8px 12px", borderRadius: 8 }}>
-          Add Mission
+          הוסף משימה
         </button>
       </div>
 
-      <Modal open={addDlg.isOpen} onClose={addDlg.close} title="Add Mission" maxWidth={640}>
+      <Modal open={addDlg.isOpen} onClose={addDlg.close} title="הוסף משימה" maxWidth={640}>
         <form onSubmit={createRow} style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 10 }}>
-          <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Mission name" required />
+          <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="משימה" required />
           <label>
-            Total needed
+            סה"כ חיילים
             <input
               type="number"
               min={1}
@@ -341,22 +341,22 @@ export default function MissionsPage() {
 
           <div style={{ gridColumn: "1 / -1", display: "flex", gap: 8, justifyContent: "flex-end" }}>
             <button type="button" onClick={addDlg.close}>
-              Cancel
+              בטל
             </button>
-            <button type="submit">Add</button>
+            <button type="submit">הוסף</button>
           </div>
         </form>
       </Modal>
 
       {err && <div style={{ color: "crimson" }}>{err}</div>}
-      {loading && <div>Loading…</div>}
+      {loading && <div>בטעינה...</div>}
 
       <table className="tbl-missions" width="100%" cellPadding={8} style={{ borderCollapse: "collapse", width: "100%" }}>
         <thead>
           <tr>
-            <th align="left">Name</th>
-            <th align="center">Total</th>
-            <th>Actions</th>
+            <th align="left">משימה</th>
+            <th align="center">סה"כ חיילים</th>
+            <th>פעולות</th>
           </tr>
         </thead>
         <tbody>
@@ -388,19 +388,19 @@ export default function MissionsPage() {
                   <td align="center" style={{ whiteSpace: "nowrap" }}>
                     {editing ? (
                       <>
-                        <button onClick={() => saveEdit(m.id)}>Save</button>
+                        <button onClick={() => saveEdit(m.id)}>שמור</button>
                         <button onClick={cancelEdit} style={{ marginLeft: 8 }}>
-                          Cancel
+                          בטל
                         </button>
                       </>
                     ) : (
                       <>
-                        <button onClick={() => startEdit(m)}>Edit</button>
+                        <button onClick={() => startEdit(m)}>ערוך</button>
                         <button onClick={() => toggleSlots(m.id)} style={{ marginLeft: 8 }}>
-                          {isOpen ? "Hide slots" : "Slots"}
+                          {isOpen ? "הסתר" : "חלונות זמן"}
                         </button>
                         <button onClick={() => remove(m.id)} style={{ marginLeft: 8, color: "crimson" }}>
-                          Delete
+                          מחק
                         </button>
                       </>
                     )}
@@ -412,7 +412,7 @@ export default function MissionsPage() {
                     <td colSpan={3} style={{ background: "#1f2937", borderTop: "1px solid #eee" }}>
                       <div style={{ display: "grid", gap: 8 }}>
                         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                          <strong>Time slots</strong>
+                          <strong>חלונות זמן</strong>
                           {error && <span style={{ color: "crimson", fontSize: 12 }}>{error}</span>}
                         </div>
 
@@ -421,7 +421,7 @@ export default function MissionsPage() {
                           style={{ display: "flex", gap: 8, alignItems: "center" }}
                         >
                           <label>
-                            Start
+                            התחלה
                             <input
                               type="time"
                               value={start}
@@ -431,7 +431,7 @@ export default function MissionsPage() {
                             />
                           </label>
                           <label>
-                            End
+                            סיום
                             <input
                               type="time"
                               value={end}
@@ -440,7 +440,7 @@ export default function MissionsPage() {
                               required
                             />
                           </label>
-                          <button type="submit">Add slot</button>
+                          <button type="submit">הוסף חלון</button>
                         </form>
 
                         <div style={{ border: "1px solid #e5e7eb", borderRadius: 6, overflow: "hidden" }}>
@@ -461,7 +461,7 @@ export default function MissionsPage() {
                                     padding: "8px",
                                   }}
                                 >
-                                  Start
+                                  התחלה
                                 </th>
                                 <th
                                   align="left"
@@ -472,7 +472,7 @@ export default function MissionsPage() {
                                     padding: "8px",
                                   }}
                                 >
-                                  End
+                                  סיום
                                 </th>
                                 <th
                                   style={{
@@ -482,7 +482,7 @@ export default function MissionsPage() {
                                     padding: "8px",
                                   }}
                                 >
-                                  Actions
+                                  פעולות
                                 </th>
                               </tr>
                             </thead>
@@ -493,7 +493,7 @@ export default function MissionsPage() {
                                   <td>{s.end_time.slice(0, 5)}</td>
                                   <td align="right">
                                     <button onClick={() => removeSlot(m.id, s.id)} style={{ color: "crimson" }}>
-                                      Delete
+                                      מחק
                                     </button>
                                   </td>
                                 </tr>
@@ -501,16 +501,12 @@ export default function MissionsPage() {
                               {slots.length === 0 && (
                                 <tr>
                                   <td colSpan={3} style={{ opacity: 0.7 }}>
-                                    (No slots yet)
+                                    (אין חלונות זמן)
                                   </td>
                                 </tr>
                               )}
                             </tbody>
                           </table>
-                        </div>
-                        <div style={{ fontSize: 12, color: "#6b7280" }}>
-                          Overnight is supported (e.g., 22:00 → 06:00). Overlapping slots for the same mission are
-                          blocked.
                         </div>
 
                         {/* Requirements editor */}
@@ -525,7 +521,7 @@ export default function MissionsPage() {
           {rows.length === 0 && (
             <tr>
               <td colSpan={3} style={{ opacity: 0.7 }}>
-                (No missions)
+                (אין משימות)
               </td>
             </tr>
           )}

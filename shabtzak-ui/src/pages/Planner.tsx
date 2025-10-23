@@ -706,16 +706,16 @@ async function shufflePlanner() {
 
     const out: Array<{ text: string; color: "red" | "orange" }> = [];
 
-    if (hasOverlap) out.push({ text: "OVERLAP", color: "red" });
+    if (hasOverlap) out.push({ text: "חפיפה", color: "red" });
 
     if (Number.isFinite(minPositiveGap)) {
-      if (minPositiveGap < H8) out.push({ text: "REST", color: "red" });
-      else if (minPositiveGap < H16) out.push({ text: "REST", color: "orange" });
+      if (minPositiveGap < H8) out.push({ text: "מנוחה", color: "red" });
+      else if (minPositiveGap < H16) out.push({ text: "מנוחה", color: "orange" });
     }
 
     // 3) RESTRICTED (orange) — based on the target mission of this slot
     if (isSoldierRestrictedForMission(s, targetMissionId, targetMissionName)) {
-      out.push({ text: "RESTRICTED", color: "orange" });
+      out.push({ text: "מוגבל", color: "orange" });
     }
 
     return out;
@@ -1751,10 +1751,10 @@ function formatWarningDetails(w: PlannerWarning): string {
 
   return (
     <div className="p-4 space-y-4">
-      <h1 className="text-xl font-semibold">Planner</h1>
+      <h1 className="text-xl font-semibold">שיבוץ</h1>
 
       <div className="flex items-center gap-3">
-        <label className="text-sm">Day</label>
+        <label className="text-sm">תאריך</label>
         <input
           type="date"
           value={day}
@@ -1766,14 +1766,14 @@ function formatWarningDetails(w: PlannerWarning): string {
           disabled={busy || locked}
           className="border rounded px-3 py-1 hover:bg-gray-50 disabled:opacity-50"
         >
-          {busy ? "Planning…" : "Fill plan for day"}
+          {busy ? "ממלא..." : "מלא"}
         </button>
         <button
           onClick={shufflePlanner}
           disabled={busy || locked}
           className="border rounded px-3 py-1 hover:bg-gray-50 disabled:opacity-50"
         >
-          {busy ? "Shuffling…" : "Shuffle Plan"}
+          {busy ? "מערבב..." : "ערבב"}
         </button>
         <button
           onClick={deletePlanForDay}
@@ -1781,7 +1781,7 @@ function formatWarningDetails(w: PlannerWarning): string {
           className="border rounded px-3 py-1 hover:bg-gray-50 disabled:opacity-50"
           style={{ marginLeft: 8 }}
         >
-          {busy ? "Working…" : "Delete Plan"}
+          {busy ? "במחיקה..." : "מחק"}
         </button>
         <button
           onClick={exportCsv}
@@ -1789,7 +1789,7 @@ function formatWarningDetails(w: PlannerWarning): string {
           className="border rounded px-3 py-1 hover:bg-gray-50 disabled:opacity-50"
           style={{ marginLeft: 8 }}
         >
-          {busy ? "Working…" : "Export csv"}
+          {busy ? "מכין קובץ..." : "ייצא קובץ"}
         </button>
                 <button
           onClick={openAvailableModal}
@@ -1797,7 +1797,7 @@ function formatWarningDetails(w: PlannerWarning): string {
           className="border rounded px-3 py-1 hover:bg-gray-50 disabled:opacity-50"
           style={{ marginLeft: 8 }}
         >
-          Available Soldiers
+          חיילים זמינים
         </button>
         <button
           onClick={() =>
@@ -1811,7 +1811,7 @@ function formatWarningDetails(w: PlannerWarning): string {
           aria-pressed={locked}
           title={locked ? `Unlock ${day}` : `Lock ${day}`}
         >
-          {locked ? "Unlock" : "Lock"}
+          {locked ? "פתח" : "נעל"}
         </button>
       </div>
 
@@ -1840,7 +1840,7 @@ function formatWarningDetails(w: PlannerWarning): string {
             <Modal
         open={isAvailOpen}
         onClose={() => setIsAvailOpen(false)}
-        title={`Available Soldiers — ${day}`}
+        title={`חיילים זמינים — ${day}`}
       >
         {availLoading && <div>Loading…</div>}
         {!availLoading && availError && (
@@ -1865,11 +1865,11 @@ function formatWarningDetails(w: PlannerWarning): string {
               return (
                 <>
                   <h3 className="text-lg font-semibold" style={{ marginBottom: 8 }}>
-                    Available on {day} ({availSoldiers.length})
+                    זמין בתאריך {day} ({availSoldiers.length})
                   </h3>
                   {availSoldiers.length === 0 ? (
                     <div className="text-gray-500" style={{ marginBottom: 12 }}>
-                      No available soldiers for this date.
+                      אין חיילים זמינים
                     </div>
                   ) : (
                     <ul style={{ marginBottom: 16 }}>
@@ -1916,11 +1916,11 @@ function formatWarningDetails(w: PlannerWarning): string {
                   )}
 
                   <h3 className="text-lg font-semibold" style={{ marginBottom: 8 }}>
-                    On vacation on {day} ({vacationSoldiers.length})
+                    בחופשה בתאיך {day} ({vacationSoldiers.length})
                   </h3>
 
                   {vacationSoldiers.length === 0 ? (
-                    <div className="text-gray-500">No soldiers on vacation this date.</div>
+                    <div className="text-gray-500">אין חיילים בחופשה</div>
                   ) : (
                     <ul>
                       {vacationSoldiers.map(({ soldier, leavingToday, returningToday }) => (
@@ -1966,23 +1966,23 @@ function formatWarningDetails(w: PlannerWarning): string {
       />
 
       <section style={{ marginTop: 16, marginBottom: 16 }}>
-        <h2 style={{ marginBottom: 8 }}>Warnings</h2>
-        {warnLoading && <div>Loading…</div>}
+        <h2 style={{ marginBottom: 8 }}>התראות</h2>
+        {warnLoading && <div>בטעינה...</div>}
         {!warnLoading && warnError && <div style={{ color: "crimson" }}>{warnError}</div>}
         {!warnLoading && !warnError && warnings.length === 0 && (
-          <div style={{ opacity: 0.7 }}>(No warnings)</div>
+          <div style={{ opacity: 0.7 }}>(אין התראות)</div>
         )}
         {!warnLoading && !warnError && warnings.length > 0 && (
           <div className="overflow-x-auto">
             <table className="min-w-full border-collapse" style={{ width: "100%" }}>
               <thead>
                 <tr>
-                  <th className="border p-2 text-left">Type</th>
-                  <th className="border p-2 text-left">Soldier</th>
-                  <th className="border p-2 text-left">Mission</th>
-                  <th className="border p-2 text-left">Time Slot</th>
-                  <th className="border p-2 text-left">Warnings</th>
-                  <th className="border p-2 text-left">Details</th>
+                  <th className="border p-2 text-left">סוג</th>
+                  <th className="border p-2 text-left">חייל</th>
+                  <th className="border p-2 text-left">משימה</th>
+                  <th className="border p-2 text-left">חלון זמן</th>
+                  <th className="border p-2 text-left">התראה</th>
+                  <th className="border p-2 text-left">פרטים</th>
                 </tr>
               </thead>
               <tbody>
@@ -2017,9 +2017,9 @@ function formatWarningDetails(w: PlannerWarning): string {
       </section>
 
       <div className="space-y-2">
-        <h2 className="font-medium">Assignments</h2>
+        <h2 className="font-medium">תכנית</h2>
 
-        {listBusy && <div className="border rounded p-3 text-gray-500">Loading…</div>}
+        {listBusy && <div className="border rounded p-3 text-gray-500">בטעינה...</div>}
 
         {!listBusy && (
           <div className="border rounded overflow-x-auto">
@@ -2029,7 +2029,7 @@ function formatWarningDetails(w: PlannerWarning): string {
             ) : (
               <>
                 {/* your existing Modal and <table> stay exactly the same below */}
-            <Modal open={isChangeOpen} onClose={() => setIsChangeOpen(false)} title="Change Soldier">
+            <Modal open={isChangeOpen} onClose={() => setIsChangeOpen(false)} title="החלף חייל">
               {changeError && <div style={{ color: "red", marginBottom: 8 }}>{changeError}</div>}
               {changeLoading && <div>Applying change…</div>}
               {!changeLoading && (
@@ -2039,7 +2039,7 @@ function formatWarningDetails(w: PlannerWarning): string {
                       type="text"
                       value={candidateSearch}
                       onChange={(e) => setCandidateSearch(e.target.value)}
-                      placeholder="Search soldiers…"
+                      placeholder="חפש חייל"
                       className="border rounded px-2 py-1 w-full"
                     />
                     {candidateSearch && (
@@ -2049,11 +2049,11 @@ function formatWarningDetails(w: PlannerWarning): string {
                         className="border rounded px-2 py-1"
                         title="Clear search"
                       >
-                        Clear
+                        נקה
                       </button>
                     )}
                   </div>
-                  {filteredCandidates.length === 0 && <div>No soldiers found</div>}
+                  {filteredCandidates.length === 0 && <div>אין חיילים</div>}
                   {filteredCandidates.map((s) => (
                   <div
                     key={s.id}
@@ -2084,7 +2084,7 @@ function formatWarningDetails(w: PlannerWarning): string {
                                   padding: "1px 6px",
                                   fontSize: "0.85em",
                                 }}
-                                title={w.text === "REST" ? (w.color === "red" ? "Rest < 8h" : "Rest < 16h") : w.text}
+                                title={w.text === "מנוחה" ? (w.color === "red" ? "< 8 שעות" : "< 16 שעות") : w.text}
                               >
                                 {w.text}
                               </span>
@@ -2094,7 +2094,7 @@ function formatWarningDetails(w: PlannerWarning): string {
                       })()}
                     </span>
                     <button type="button" onClick={() => handleReassign(s.id)}>
-                      Assign
+                      שבץ
                     </button>
                   </div>
                   ))}
@@ -2118,7 +2118,7 @@ function formatWarningDetails(w: PlannerWarning): string {
                       }
                     }}
                   >
-                    No Assignee
+                    השאר ריק
                   </button>
                 </div>
               )}
@@ -2127,11 +2127,11 @@ function formatWarningDetails(w: PlannerWarning): string {
             <table className="min-w-[760px] w-full text-sm">
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="text-left p-2 border w-[220px]">Mission</th>
-                  <th className="text-left p-2 border w-[260px]">Time Slot</th>
-                  <th className="text-left p-2 border">Role</th>
-                  <th className="text-left p-2 border">Soldier</th>
-                  <th className="text-left p-2 border">Warnings</th>
+                  <th className="text-left p-2 border w-[220px]">משימה</th>
+                  <th className="text-left p-2 border w-[260px]">חלון זמן</th>
+                  <th className="text-left p-2 border">תפקיד</th>
+                  <th className="text-left p-2 border">חייל</th>
+                  <th className="text-left p-2 border">התראות</th>
                 </tr>
               </thead>
               <tbody>
@@ -2220,7 +2220,7 @@ function formatWarningDetails(w: PlannerWarning): string {
                               <td className="p-2 border">
                                 <div className="flex items-center gap-2">
                                   <span className="italic text-gray-500" style={{ color: "crimson" }}>
-                                    Unassigned
+                                    לא משובץ
                                   </span>
 
                                   {(() => {
@@ -2245,7 +2245,7 @@ function formatWarningDetails(w: PlannerWarning): string {
                                           )
                                         }
                                       >
-                                        Change
+                                        החלף
                                       </button>
                                     );
                                   })()}
@@ -2276,7 +2276,7 @@ function formatWarningDetails(w: PlannerWarning): string {
                                               )
                                             }
                                           >
-                                            Assign {roleName}
+                                            שבץ {roleName}
                                           </button>
                                         </div>
                                       );
@@ -2352,7 +2352,7 @@ function formatWarningDetails(w: PlannerWarning): string {
                                   <div className="flex items-center gap-2">
                                     {(() => {
                                       if (!r.soldier_id || !r.soldier_name) {
-                                        return <span style={{ color: "crimson" }}>Unassigned</span>;
+                                        return <span style={{ color: "crimson" }}>לא משובץ</span>;
                                       }
                                       const tier = restTierForRow(r);
                                       const style =
@@ -2380,7 +2380,7 @@ function formatWarningDetails(w: PlannerWarning): string {
                                       onClick={() => openChangeModal(r.id, r.role)}
                                       className="border rounded px-2 py-1"
                                     >
-                                      Change
+                                      החלף
                                     </button>
                                   </div>
                                 </td>

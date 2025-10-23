@@ -9,14 +9,14 @@ export default function NavBar() {
   return (
     <header className="navbar">
       <div className="navbar-inner">
-        <div className="brand">Shabtzak</div>
+        <div className="brand">שבצ"כ</div>
         <nav className="nav">
           {/*<NavLink to="/" end className={linkClass}>Home</NavLink>*/}
           {/*<NavLink to="/roles" className={linkClass}>Roles</NavLink>*/}
           {/*<NavLink to="/departments" className={linkClass}>Departments</NavLink>*/}
-          <NavLink to="/missions" className={linkClass}>Missions</NavLink>
-          <NavLink to="/soldiers" className={linkClass}>Soldiers</NavLink>
-          <NavLink to="/planner" className={linkClass}>Planner</NavLink>
+          <NavLink to="/missions" className={linkClass}>משימות</NavLink>
+          <NavLink to="/soldiers" className={linkClass}>חיילים</NavLink>
+          <NavLink to="/planner" className={linkClass}>שיבוץ</NavLink>
           {/*<NavLink to="/assignments" className={linkClass}>Assignments</NavLink>*/}
           {/*<NavLink to="/vacations" className={linkClass}>Vacations</NavLink>*/}
         </nav>

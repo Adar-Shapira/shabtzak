@@ -545,16 +545,16 @@ export default function SoldiersPage() {
         <div style={{ maxWidth: 1200, margin: "24px auto", padding: 16, fontFamily: "sans-serif" }}>
 
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <h1>Soldiers</h1>
+                <h1>חיילים</h1>
                 <div style={{ display: "flex", gap: 8 }}>
                     <button onClick={() => rolesDlg.open()} style={{ padding: "8px 12px", borderRadius: 8 }}>
-                    Roles
+                    נהל תפקידים
                     </button>
                     <button onClick={startAddDept} style={{ padding: "8px 12px", borderRadius: 8 }}>
-                    Add Department
+                    הוסף מחלקה
                     </button>
                     <button onClick={addDlg.open} style={{ padding: "8px 12px", borderRadius: 8 }}>
-                    Add Soldier
+                    הוסף חייל
                     </button>
                 </div>
             </div>
@@ -568,7 +568,7 @@ export default function SoldiersPage() {
 
                     {/* Roles multi */}
                     <div>
-                    <div style={{ fontSize: 12, opacity:.8, marginBottom: 4 }}>Roles</div>
+                    <div style={{ fontSize: 12, opacity:.8, marginBottom: 4 }}>תפקיד</div>
                     <select
                         multiple
                         size={5}
@@ -585,55 +585,55 @@ export default function SoldiersPage() {
 
                     {/* Department */}
                     <div>
-                    <div style={{ fontSize: 12, opacity:.8, marginBottom: 4 }}>Department</div>
+                    <div style={{ fontSize: 12, opacity:.8, marginBottom: 4 }}>מחלקה</div>
                     <select value={newDeptId} onChange={(e)=>setNewDeptId(e.target.value ? Number(e.target.value) : "")} style={{ width: "100%" }}>
-                        <option value="">(no department)</option>
+                        <option value="">(-)</option>
                         {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
                     </select>
                     </div>
 
                     {/* Restrictions */}
                     <div>
-                    <div style={{ fontSize: 12, opacity:.8, marginBottom: 4 }}>Restrictions</div>
+                    <div style={{ fontSize: 12, opacity:.8, marginBottom: 4 }}>הגבלות</div>
                     <select multiple size={5} value={newRestrictions} onChange={(e)=>onMultiChangeStrings(e, setNewRestrictions)} style={{ width: "100%" }}>
                         {restrictionOptions.map(n => <option key={n} value={n}>{n}</option>)}
                     </select>
                     </div>
 
                     <div style={{ alignSelf: "end", display: "flex", gap: 8 }}>
-                    <button type="button" onClick={addDlg.close}>Cancel</button>
-                    <button type="submit">Add</button>
+                    <button type="button" onClick={addDlg.close}>בטל</button>
+                    <button type="submit">הוסף</button>
                     </div>
                 </form>
             </Modal>
 
             {/* Add/Rename Department Modal */}
-            <Modal open={deptDlg.isOpen} onClose={cancelDeptDialog} title={deptEditId == null ? "Add Department" : "Rename Department"} maxWidth={480}>
+            <Modal open={deptDlg.isOpen} onClose={cancelDeptDialog} title={deptEditId == null ? "הוסף מחלקה" : "שנה שם"} maxWidth={480}>
                 <form onSubmit={saveDept} style={{ display: "grid", gap: 10 }}>
                     <input
                     value={deptName}
                     onChange={(e) => setDeptName(e.target.value)}
-                    placeholder="Department name"
+                    placeholder="שם מחלקה"
                     required
                     />
                     <div style={{ display: "flex", justifyContent: "end", gap: 8 }}>
-                        <button type="button" onClick={cancelDeptDialog}>Cancel</button>
-                        <button type="submit">{deptEditId == null ? "Add" : "Save"}</button>
+                        <button type="button" onClick={cancelDeptDialog}>בטל</button>
+                        <button type="submit">{deptEditId == null ? "הוסף" : "שמור"}</button>
                     </div>
                 </form>
             </Modal>
 
             {/* Roles Modal */}
-            <Modal open={rolesDlg.isOpen} onClose={cancelRoleDialog} title="Roles" maxWidth={640}>
+            <Modal open={rolesDlg.isOpen} onClose={cancelRoleDialog} title="תפקיד" maxWidth={640}>
                 <div style={{ display: "grid", gap: 12 }}>
                     {/* Toolbar */}
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <div style={{ fontSize: 12, opacity: 0.75 }}>
-                        Manage roles
+                        נהל תפקידים
                     </div>
                     <div style={{ display: "flex", gap: 8 }}>
-                        <button onClick={startAddRole}>Add Role</button>
-                        <button onClick={cancelRoleDialog}>Close</button>
+                        <button onClick={startAddRole}>הוסף תפקיד</button>
+                        <button onClick={cancelRoleDialog}>סגור</button>
                     </div>
                     </div>
 
@@ -643,11 +643,11 @@ export default function SoldiersPage() {
                             <input
                             value={roleName}
                             onChange={(e) => setRoleName(e.target.value)}
-                            placeholder="Role name"
+                            placeholder="תפקיד"
                             required
                             />
                             <div style={{ display: "flex", gap: 8 }}>
-                            <button type="submit">{roleEditId == null ? "Add" : "Save"}</button>
+                            <button type="submit">{roleEditId == null ? "הוסף" : "שמור"}</button>
                             <button
                                 type="button"
                                 onClick={() => {
@@ -663,12 +663,12 @@ export default function SoldiersPage() {
                     )}
 
                     {/* Roles list */}
-                    <table width="100%" cellPadding={8} style={{ borderCollapse: "collapse" }}>
+                    <table width="100%" cellPadding={7} style={{ borderCollapse: "collapse" }}>
                     <thead>
                         <tr>
-                        <th align="left" style={{ width: 60 }}>ID</th>
-                        <th align="left">Name</th>
-                        <th align="left" style={{ width: 180 }}>Actions</th>
+                        {/*<th align="left" style={{ width: 60 }}>ID</th>*/}
+                        <th align="left">תפקיד</th>
+                        <th align="left" style={{ width: 180 }}>פעולות</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -677,19 +677,19 @@ export default function SoldiersPage() {
                             <td>{r.id}</td>
                             <td>{r.name}</td>
                             <td>
-                            <button onClick={() => startEditRole(r.id, r.name)}>Edit</button>
+                            <button onClick={() => startEditRole(r.id, r.name)}>ערוך</button>
                             <button
                                 onClick={() => deleteRole(r.id, r.name)}
                                 style={{ marginLeft: 8, color: "crimson" }}
                             >
-                                Delete
+                                מחק
                             </button>
                             </td>
                         </tr>
                         ))}
                         {roles.length === 0 && (
                         <tr>
-                            <td colSpan={4} style={{ opacity: 0.7 }}>(No roles yet)</td>
+                            <td colSpan={4} style={{ opacity: 0.7 }}>(-)</td>
                         </tr>
                         )}
                     </tbody>
@@ -702,40 +702,40 @@ export default function SoldiersPage() {
             <Modal
             open={vacDlg.isOpen}
             onClose={closeVacations}
-            title={vacSoldier ? `Vacations — ${vacSoldier.name}` : "Vacations"}
+            title={vacSoldier ? `חופשות — ${vacSoldier.name}` : "חופשות"}
             maxWidth={720}
             >
                 {!vacSoldier ? (
-                    <div style={{ opacity: 0.7 }}>No soldier selected.</div>
+                    <div style={{ opacity: 0.7 }}>לא נבחר חייל</div>
                 ) : (
                     <div style={{ display: "grid", gap: 12 }}>
                     {/* Toolbar */}
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                         <div style={{ fontSize: 12, opacity: 0.75 }}>
-                        Add date ranges when this soldier is unavailable.
+                            הוסף טווח תאריכים בהם החייל בחופשה
                         </div>
                         <div style={{ display: "flex", gap: 8 }}>
-                        <button onClick={startAddVacation}>Add</button>
-                        <button onClick={closeVacations}>Close</button>
+                        <button onClick={startAddVacation}>הוסף</button>
+                        <button onClick={closeVacations}>סגור</button>
                         </div>
                     </div>
 
                     {/* Add/Edit form */}
                     <form onSubmit={saveVacation} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr auto", gap: 8, alignItems: "center" }}>
                         <div>
-                        <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 4 }}>Start</div>
+                        <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 4 }}>התחלה</div>
                         <input type="date" value={vacStart} onChange={(e) => setVacStart(e.target.value)} required />
                         </div>
                         <div>
-                        <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 4 }}>End</div>
+                        <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 4 }}>סיום</div>
                         <input type="date" value={vacEnd} onChange={(e) => setVacEnd(e.target.value)} required />
                         </div>
                         <div>
-                        <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 4 }}>Note</div>
+                        <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 4 }}>הערות</div>
                         <input type="text" value={vacNote} onChange={(e) => setVacNote(e.target.value)} placeholder="Optional" />
                         </div>
                         <div style={{ display: "flex", gap: 8, alignItems: "end" }}>
-                        <button type="submit">{vacEditId == null ? "Add" : "Save"}</button>
+                        <button type="submit">{vacEditId == null ? "הוסף" : "שמור"}</button>
                         {vacEditId != null && (
                             <button
                             type="button"
@@ -746,7 +746,7 @@ export default function SoldiersPage() {
                                 setVacNote("");
                             }}
                             >
-                            Cancel
+                            בטל
                             </button>
                         )}
                         </div>
@@ -759,11 +759,11 @@ export default function SoldiersPage() {
                     maxWidth={720}
                     >
                     {!restrSoldier ? (
-                        <div style={{ opacity: 0.7 }}>No soldier selected.</div>
+                        <div style={{ opacity: 0.7 }}>לא נבחר חייל</div>
                     ) : (
                         <div style={{ display: "grid", gap: 12 }}>
                         <div style={{ fontSize: 12, opacity: 0.75 }}>
-                            Soldier will not be assigned to the selected missions.
+                            חיילים לא ישובצו למשימות שנבחרו
                         </div>
 
                         <div className="flex flex-wrap gap-2">
@@ -787,7 +787,7 @@ export default function SoldiersPage() {
                         </div>
 
                         <div style={{ display: "flex", justifyContent: "end", gap: 8 }}>
-                            <button onClick={closeRestrictions}>Close</button>
+                            <button onClick={closeRestrictions}>סגור</button>
                             <button
                             onClick={async () => {
                                 try {
@@ -801,7 +801,7 @@ export default function SoldiersPage() {
                             className="border rounded px-3 py-1 text-sm hover:bg-gray-50 disabled:opacity-50"
                             disabled={!!(restrSoldier && savingRestr === restrSoldier.id)}
                             >
-                            {restrSoldier && savingRestr === restrSoldier.id ? "Saving…" : "Save"}
+                            {restrSoldier && savingRestr === restrSoldier.id ? "בשמירה..." : "שמור"}
                             </button>
                         </div>
                         </div>
@@ -809,14 +809,14 @@ export default function SoldiersPage() {
                     </Modal>
 
                     {/* Vacations list */}
-                    <table width="100%" cellPadding={8} style={{ borderCollapse: "collapse" }}>
+                    <table width="100%" cellPadding={7} style={{ borderCollapse: "collapse" }}>
                         <thead>
                         <tr>
-                            <th align="left" style={{ width: 60 }}>ID</th>
-                            <th align="left" style={{ width: 140 }}>Start</th>
-                            <th align="left" style={{ width: 140 }}>End</th>
-                            <th align="left">Note</th>
-                            <th align="left" style={{ width: 160 }}>Actions</th>
+                            {/*<th align="left" style={{ width: 60 }}>ID</th>*/}
+                            <th align="left" style={{ width: 140 }}>התחלה</th>
+                            <th align="left" style={{ width: 140 }}>סיום</th>
+                            <th align="left">הערות</th>
+                            <th align="left" style={{ width: 160 }}>פעולות</th>
                         </tr>
                         </thead>
                         <tbody>
@@ -825,18 +825,18 @@ export default function SoldiersPage() {
                             <td>{v.id}</td>
                             <td>{v.start_date}</td>
                             <td>{v.end_date}</td>
-                            <td>{v.note ?? <span style={{ opacity: 0.6 }}>(none)</span>}</td>
+                            <td>{v.note ?? <span style={{ opacity: 0.6 }}>(אין)</span>}</td>
                             <td>
-                                <button onClick={() => startEditVacation(v)}>Edit</button>
+                                <button onClick={() => startEditVacation(v)}>ערוך</button>
                                 <button onClick={() => deleteVacation(v)} style={{ marginLeft: 8, color: "crimson" }}>
-                                Delete
+                                מחק
                                 </button>
                             </td>
                             </tr>
                         ))}
                         {vacations.length === 0 && (
                             <tr>
-                            <td colSpan={5} style={{ opacity: 0.7 }}>(No vacations yet)</td>
+                            <td colSpan={5} style={{ opacity: 0.7 }}>(אין חופשות)</td>
                             </tr>
                         )}
                         </tbody>
@@ -846,13 +846,13 @@ export default function SoldiersPage() {
             </Modal>
 
             {err && <div style={{ color: "crimson", marginBottom: 12 }}>{err}</div>}
-            {loading && <div>Loading…</div>}
+            {loading && <div>בטעינה...</div>}
 
             {/* Grouped by Department (collapsible) */}
             {!loading && (
                 <>
                     {!loading && departments.length === 0 && (
-                    <div style={{ opacity: 0.7 }}>(No departments yet)</div>
+                    <div style={{ opacity: 0.7 }}>(אין מחלקות)</div>
                     )}
 
                     <div style={{ display: "grid", gap: 10 }}>
@@ -874,14 +874,14 @@ export default function SoldiersPage() {
                                 style={{ display: "flex", gap: 8 }}
                                 >
                                 <button onClick={() => startEditDept(dep.id, dep.name)} title="Rename department">
-                                    Edit
+                                    ערוך
                                 </button>
                                 <button
                                     onClick={() => deleteDept(dep.id, dep.name)}
                                     style={{ color: "crimson" }}
                                     title="Delete department"
                                 >
-                                    Delete
+                                    מחק
                                 </button>
                                 </div>
                             </div>
@@ -890,19 +890,19 @@ export default function SoldiersPage() {
                             <div style={{ marginTop: 8 }}>
                             {list.length === 0 ? (
                                 <div style={{ border: "1px dashed #ddd", padding: 12, borderRadius: 8, opacity: 0.75 }}>
-                                No soldiers in this department yet.
+                                אין חיילים במחלקה
                                 </div>
                             ) : (
-                                <table width="100%" cellPadding={8} style={{ borderCollapse: "collapse" }}>
+                                <table width="100%" cellPadding={7} style={{ borderCollapse: "collapse" }}>
                                 <thead>
                                     <tr>
-                                    <th align="left" style={{ width: 60 }}>ID</th>
-                                    <th align="left">Name</th>
-                                    <th align="left" style={{ width: 320 }}>Roles</th>
-                                    <th align="left" style={{ width: 220 }}>Department</th>
-                                    <th align="left" style={{ width: 260 }}>Restrictions</th>
-                                    <th align="left" style={{ width: 160 }}>Vacations</th>
-                                    <th align="left" style={{ width: 180 }}>Actions</th>
+                                    {/*<th align="left" style={{ width: 60 }}>ID</th>*/}
+                                    <th align="left">שם</th>
+                                    <th align="left" style={{ width: 320 }}>תפקיד</th>
+                                    <th align="left" style={{ width: 220 }}>מחלקה</th>
+                                    <th align="left" style={{ width: 260 }}>הגבלות</th>
+                                    <th align="left" style={{ width: 160 }}>חופשות</th>
+                                    <th align="left" style={{ width: 180 }}>פעולות</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -910,7 +910,7 @@ export default function SoldiersPage() {
                                     const isEditing = editId === s.id;
                                     return (
                                         <tr key={s.id} style={{ borderTop: "1px solid #eee" }}>
-                                        <td>{s.id}</td>
+                                        {/*<td>{s.id}</td>*/}
 
                                         {/* name */}
                                         <td>
@@ -945,7 +945,7 @@ export default function SoldiersPage() {
                                             ) : s.roles?.length ? (
                                             s.roles.map((r) => r.name).join(", ")
                                             ) : (
-                                            <span style={{ opacity: 0.6 }}>(none)</span>
+                                            <span style={{ opacity: 0.6 }}>(אין)</span>
                                             )}
                                         </td>
 
@@ -957,13 +957,13 @@ export default function SoldiersPage() {
                                                 onChange={(e) => setEditDeptId(e.target.value ? Number(e.target.value) : "")}
                                                 style={{ width: "100%" }}
                                             >
-                                                <option value="">(no department)</option>
+                                                <option value="">(אין מחלקה)</option>
                                                 {departments.map((d) => (
                                                 <option key={d.id} value={d.id}>{d.name}</option>
                                                 ))}
                                             </select>
                                             ) : (
-                                            s.department_name ?? <span style={{ opacity: 0.6 }}>(none)</span>
+                                            s.department_name ?? <span style={{ opacity: 0.6 }}>(אין)</span>
                                             )}
                                         </td>
 
@@ -984,36 +984,36 @@ export default function SoldiersPage() {
                                             ) : s.restrictions_tokens && s.restrictions_tokens.length ? (
                                             s.restrictions_tokens.join(", ")
                                             ) : (
-                                            <span style={{ opacity: 0.6 }}>(none)</span>
+                                            <span style={{ opacity: 0.6 }}>(אין)</span>
                                             )}
                                         </td>
 
                                         {/* vacations */}
                                         <td>
-                                            <button onClick={() => openVacations(s)}>Vacations</button>
+                                            <button onClick={() => openVacations(s)}>חופשות</button>
                                         </td>
                                         <td>
                                             <button onClick={() => setHistoryFor({ id: s.id, name: s.name })}>
-                                                History
+                                                היסטוריה
                                             </button>
                                         </td>
                                         {/* actions */}
                                         <td>
                                         {isEditing ? (
                                             <>
-                                            <button onClick={() => saveEdit(s.id)}>Save</button>
-                                            <button onClick={cancelEdit} style={{ marginLeft: 8 }}>Cancel</button>
+                                            <button onClick={() => saveEdit(s.id)}>שמור</button>
+                                            <button onClick={cancelEdit} style={{ marginLeft: 8 }}>בטל</button>
                                             </>
                                         ) : (
                                             <>
                                             <button onClick={() => startEdit(s)} style={{ marginLeft: 8 }}>
-                                                Edit
+                                                ערוך
                                             </button>
                                             <button
                                                 onClick={() => removeSoldier(s.id)}
                                                 style={{ marginLeft: 8, color: "crimson" }}
                                             >
-                                                Delete
+                                                מחק
                                             </button>
                                             </>
                                         )}
@@ -1036,7 +1036,7 @@ export default function SoldiersPage() {
                         <summary style={{ cursor: "pointer", userSelect: "none" }}>
                         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
                             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                            <span style={{ fontWeight: 600 }}>Unassigned</span>
+                            <span style={{ fontWeight: 600 }}>לא משובץ</span>
                             <span style={{ opacity: 0.7, fontSize: 12 }}>({unassigned.length})</span>
                             </div>
                         </div>
