@@ -128,13 +128,15 @@ export async function listSoldiers(): Promise<Soldier[]> {
   return data;
 }
 
-export type ReassignPayload = {
+type ReassignPayload = {
   assignment_id: number;
   soldier_id: number;
+  ignore_rules?: boolean; // optional for backward compatibility
 };
 
 export async function reassignAssignment(payload: ReassignPayload) {
-  const { data } = await api.post("/assignments/reassign", payload);
+  const body = { ignore_rules: true, ...payload };
+  const { data } = await api.post("/assignments/reassign", body);
   return data;
 }
 

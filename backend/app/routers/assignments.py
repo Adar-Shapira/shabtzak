@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from pydantic import BaseModel, field_validator
 from sqlalchemy import select, and_, delete
 from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.exc import IntegrityError
 
 from app.db import get_db, SessionLocal
 from app.models.assignment import Assignment
@@ -248,6 +249,7 @@ def day_roster(
 class ReassignRequest(BaseModel):
     assignment_id: int
     soldier_id: int
+    ignore_rules: bool = False  # when True, do not block; auto-resolve conflicts
 
 @router.post("/reassign")
 def reassign_assignment(body: ReassignRequest, db: Session = Depends(get_db)):
@@ -266,7 +268,29 @@ def reassign_assignment(body: ReassignRequest, db: Session = Depends(get_db)):
             SoldierMissionRestriction.mission_id == a.mission_id,
         ).first()
         if restricted:
-            raise HTTPException(status_code=400, detail="Soldier is restricted from this mission")
+            if not body.ignore_rules:
+                raise HTTPException(status_code=400, detail="Soldier is restricted from this mission")
+            # forced: record a soft warning and continue
+            warning_restriction = "IGNORED: soldier is restricted from this mission"
+    else:
+        warning_restriction = None
+
+    # If forcing, automatically clear overlapping assignments for this soldier
+    if body.ignore_rules:
+        # any assignment for this soldier that overlaps [a.start_at, a.end_at)
+        overlapping = (
+            db.query(Assignment)
+              .filter(
+                  Assignment.soldier_id == s.id,
+                  Assignment.id != a.id,
+                  Assignment.start_at < a.end_at,
+                  Assignment.end_at > a.start_at,
+              )
+              .all()
+        )
+        for ov in overlapping:
+            ov.soldier_id = None  # unassign conflicting slot instead of failing
+            db.add(ov)
 
     a.soldier_id = s.id
     db.add(a)
@@ -275,8 +299,26 @@ def reassign_assignment(body: ReassignRequest, db: Session = Depends(get_db)):
         db.commit()
     except IntegrityError as e:
         db.rollback()
-        # Shouldn’t happen once the constraint is gone, but return a clean error if anything else fires
-        raise HTTPException(status_code=400, detail="Cannot reassign due to a DB constraint") from e
+        if not body.ignore_rules:
+            raise HTTPException(status_code=400, detail="Cannot reassign due to a DB constraint") from e
+        # As a fallback while forcing, try again after clearing conflicts found mid-transaction
+        # (this is defensive; usually step above already cleared conflicts)
+        overlapping = (
+            db.query(Assignment)
+              .filter(
+                  Assignment.soldier_id == s.id,
+                  Assignment.id != a.id,
+                  Assignment.start_at < a.end_at,
+                  Assignment.end_at > a.start_at,
+              )
+              .all()
+        )
+        for ov in overlapping:
+            ov.soldier_id = None
+            db.add(ov)
+        a.soldier_id = s.id
+        db.add(a)
+        db.commit()
 
     db.refresh(a)
 
@@ -295,6 +337,7 @@ def reassign_assignment(body: ReassignRequest, db: Session = Depends(get_db)):
         "end_local": end_local,
         "start_epoch_ms": int(a.start_at.timestamp() * 1000),
         "end_epoch_ms": int(a.end_at.timestamp() * 1000),
+        "warnings": [w for w in [warning_restriction] if w],
     }
 
 class CreateAssignmentRequest(BaseModel):
