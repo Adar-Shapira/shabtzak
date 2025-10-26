@@ -168,6 +168,7 @@ export async function getSoldierMissionHistory(soldierId: number): Promise<Missi
 
 export type PlannerWarning = {
   type: "RESTRICTED" | "OVERLAP" | "REST";
+  level?: 'RED' | 'ORANGE';
   soldier_id: number;
   soldier_name: string;
   mission_id: number;

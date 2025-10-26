@@ -1993,19 +1993,17 @@ function formatWarningDetails(w: PlannerWarning): string {
                     <td className="border p-2">{w.mission_name}</td>
                     <td className="border p-2">{renderWarningTimeSlot(w)}</td>
                     <td className="border p-2">
-                      <WarningsCell
-                        items={[
-                          {
-                            type: w.type,
-                            color:
-                              w.type === "OVERLAP"
-                                ? "red"
-                                : w.type === "REST"
-                                ? "red"
-                                : "gray", // RESTRICTED -> gray
-                          } as const,
-                        ]}
-                      />
+                      {(() => {
+                        const color =
+                          w.level === "RED"
+                            ? "red"
+                            : w.level === "ORANGE"
+                            ? "orange"
+                            : w.type === "RESTRICTED"
+                            ? "gray"
+                            : undefined;
+                        return <WarningsCell items={[{ type: w.type, color }]} />;
+                      })()}
                     </td>
                     <td className="border p-2">{formatWarningDetails(w)}</td>
                   </tr>
@@ -2319,22 +2317,23 @@ function formatWarningDetails(w: PlannerWarning): string {
                         <React.Fragment key={slot.key}>
                           {slotDivider}
                           {rowsForSlot.map((r, idx) => {
-                            
                             // ⛳ ANCHOR: merge RESTRICTED pill into Assignments->Warnings
                             const apiWarnings = warningsByAssignmentId.get(r.id) || [];
 
                             const coloredApi: Array<{ type: string; color?: "red" | "orange" | "gray" }> =
-                              apiWarnings.map(
-                                (w): { type: string; color?: "red" | "orange" | "gray" } => ({
+                              apiWarnings.map((w) => {
+                                const levelColor =
+                                  w.level === "RED" ? "red" : w.level === "ORANGE" ? "orange" : undefined;
+                                return {
                                   type: w.type,
-                                  color: w.type === "OVERLAP" ? "red" : w.type === "REST" ? "red" : "gray",
-                                })
-                              );
+                                  // RESTRICTED stays gray; otherwise use level when present
+                                  color: w.type === "RESTRICTED" ? "gray" : levelColor,
+                                };
+                              });
 
                             // if there are API pills we use them; if not, we fall back to local overlap/rest
                             const basePills =
                               coloredApi.length > 0 ? coloredApi : pillItemsForRow(r);
-
                             // add RESTRICTED (orange) if the soldier is restricted for this mission
                             const restrictedPill = isRowRestricted(r)
                               ? [{ type: "RESTRICTED", color: "orange" } as const]

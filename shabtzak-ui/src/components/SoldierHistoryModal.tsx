@@ -108,18 +108,18 @@ export default function SoldierHistoryModal({ soldierId, soldierName, isOpen, on
     }, [isOpen, soldierId])
 
   return (
-    <Modal open={isOpen} onClose={onClose} title={`Mission History — ${soldierName}`}>
+    <Modal open={isOpen} onClose={onClose} title={`היסטוריית משימות — ${soldierName}`}>
       {loading && <div>Loading…</div>}
       {!loading && error && <div style={{ color: "red" }}>{error}</div>}
-      {!loading && !error && items.length === 0 && <div>No missions found.</div>}
+      {!loading && !error && items.length === 0 && <div>לא נמצאו משימות</div>}
       {!loading && !error && items.length > 0 && (
         <div className="overflow-x-auto">
           <table className="min-w-full border-collapse">
             <thead>
               <tr>
-                <th className="border p-2 text-left">Mission</th>
-                <th className="border p-2 text-left">Time Slot</th>
-                <th className="border p-2 text-left">Fellow Soldiers</th>
+                <th className="border p-2 text-left">משימה</th>
+                <th className="border p-2 text-left">חלון זמן</th>
+                <th className="border p-2 text-left">חברים למשימה</th>
               </tr>
             </thead>
             <tbody>

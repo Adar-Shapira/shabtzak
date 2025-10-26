@@ -15,3 +15,4 @@ class WarningItem(BaseModel):
     end_at: str
     details: Optional[str] = None
     assignment_id: Optional[int] = None
+    level : str | None = None
