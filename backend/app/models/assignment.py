@@ -1,12 +1,9 @@
 # backend\app\models\assignment.py
-from datetime import datetime, date, time, timezone, timedelta
+from datetime import datetime, date, time, timedelta
 from sqlalchemy import ForeignKey, DateTime, UniqueConstraint, Index
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db import Base
-from zoneinfo import ZoneInfo
-import os
 
-LOCAL_TZ = ZoneInfo(os.getenv("APP_TZ", "UTC"))
 
 class Assignment(Base):
     __tablename__ = "assignments"
@@ -21,12 +18,12 @@ class Assignment(Base):
         Index("ix_assignments_soldier_time", "soldier_id", "start_at", "end_at"),
     )
 
-    start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    end_at: Mapped[datetime]   = mapped_column(DateTime(timezone=True), nullable=False)
+    start_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False)
+    end_at: Mapped[datetime]   = mapped_column(DateTime(timezone=False), nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
+        DateTime(timezone=False),
+        default=lambda: datetime.now(),
         nullable=False
     )
 
@@ -36,9 +33,12 @@ class Assignment(Base):
 
     @staticmethod
     def window_for(mission_start: time, mission_end: time, day: date) -> tuple[datetime, datetime]:
-        # build in LOCAL tz, then convert to UTC for storage
-        start_local = datetime.combine(day, mission_start).replace(tzinfo=LOCAL_TZ)
-        end_local = datetime.combine(day, mission_end).replace(tzinfo=LOCAL_TZ)
-        if end_local <= start_local:
-            end_local += timedelta(days=1)
-        return start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc)
+        """
+        Build naive datetimes from a day + mission slot times (no timezone math).
+        If end <= start, roll end by +1 day.
+        """
+        start_dt = datetime.combine(day, mission_start)
+        end_dt   = datetime.combine(day, mission_end)
+        if end_dt <= start_dt:
+            end_dt += timedelta(days=1)
+        return start_dt, end_dt

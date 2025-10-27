@@ -7,18 +7,16 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.schemas.history import MissionHistoryItem
 
-import os
 
-APP_TZ = os.getenv("APP_TZ", "UTC")
 router = APIRouter(prefix="/soldiers", tags=["soldiers"])
 
 SQL = """
 SELECT
   a.mission_id AS mission_id,
   m.name       AS mission_name,
-  (a.start_at AT TIME ZONE 'UTC' AT TIME ZONE :tz)::date AS slot_date,
-  (a.start_at AT TIME ZONE 'UTC' AT TIME ZONE :tz)::time AS start_time,
-  (a.end_at   AT TIME ZONE 'UTC' AT TIME ZONE :tz)::time AS end_time,
+  (a.start_at)::date AS slot_date,
+  (a.start_at)::time AS start_time,
+  (a.end_at)::time   AS end_time,
   ARRAY_AGG(f.name) FILTER (
     WHERE a2.soldier_id IS NOT NULL AND a2.soldier_id <> :soldier_id
   ) AS fellow_soldiers
@@ -31,12 +29,12 @@ LEFT JOIN assignments a2
 LEFT JOIN soldiers f ON f.id = a2.soldier_id
 WHERE a.soldier_id = :soldier_id
 GROUP BY a.mission_id, m.name,
-         (a.start_at AT TIME ZONE 'UTC' AT TIME ZONE :tz)::date,
-         (a.start_at AT TIME ZONE 'UTC' AT TIME ZONE :tz)::time,
-         (a.end_at   AT TIME ZONE 'UTC' AT TIME ZONE :tz)::time
+         (a.start_at)::date,
+         (a.start_at)::time,
+         (a.end_at)::time
 ORDER BY
-  (a.start_at AT TIME ZONE 'UTC' AT TIME ZONE :tz)::date DESC NULLS LAST,
-  (a.start_at AT TIME ZONE 'UTC' AT TIME ZONE :tz)::time DESC NULLS LAST,
+  (a.start_at)::date DESC NULLS LAST,
+  (a.start_at)::time DESC NULLS LAST,
   m.name ASC
 """
 
@@ -47,7 +45,7 @@ def get_mission_history(soldier_id: int, db: Session = Depends(get_db)):
     if not exists:
         raise HTTPException(status_code=404, detail="Soldier not found")
 
-    rows = db.execute(text(SQL), {"soldier_id": soldier_id, "tz": APP_TZ}).mappings().all()
+    rows = db.execute(text(SQL), {"soldier_id": soldier_id}).mappings().all()
 
     cleaned: List[MissionHistoryItem] = []
     for r in rows:

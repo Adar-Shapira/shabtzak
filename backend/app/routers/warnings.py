@@ -1,6 +1,6 @@
 # backend/app/routers/warnings.py
 import os
-from datetime import datetime, date, time, timedelta, timezone
+from datetime import datetime, date, time, timedelta
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -10,14 +10,11 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.schemas.warnings import WarningItem
 
-from zoneinfo import ZoneInfo
 
 router = APIRouter(prefix="/plan", tags=["planner"])
 
-APP_TZ = os.getenv("APP_TZ", "UTC")
 # Treat "about 8 hours" as 8h ± this many minutes
 NEAR_EIGHT_MINUTES = 10
-_TZ = ZoneInfo(APP_TZ)
 
 SQL = """
 WITH ordered_cte AS (
@@ -30,7 +27,7 @@ WITH ordered_cte AS (
     a.end_at,
     LAG(a.end_at) OVER (PARTITION BY a.soldier_id ORDER BY a.start_at, a.end_at) AS prev_end_at
   FROM assignments a
-  WHERE a.start_at < :day_end_utc
+  WHERE a.start_at < :day_end
 ),
 rests AS (
   -- Compute two consecutive rest gaps per assignment:
@@ -52,8 +49,8 @@ base AS (
   -- Keep only rows that overlap the selected day window
   SELECT *
   FROM ordered_cte
-  WHERE end_at > :day_start_utc
-    AND start_at < :day_end_utc
+  WHERE end_at > :day_start
+    AND start_at < :day_end
 ),
 overlap_cte AS (
   SELECT
@@ -71,7 +68,7 @@ rest_cte AS (
     AND (o.start_at - o.prev_end_at) >= interval '0 hours'
     AND (o.start_at - o.prev_end_at) < interval '8 hours'
     -- only warn for assignments that START on the selected day in APP_TZ
-    AND ((o.start_at AT TIME ZONE 'UTC' AT TIME ZONE :tz)::date = :day_date)
+    AND ((o.start_at)::date = :day_date)
 ),
 double_eight_cte AS (
   -- New RED REST: two consecutive ~8h rests.
@@ -94,7 +91,7 @@ double_eight_cte AS (
     AND r.prev_rest_seconds IS NOT NULL
     AND r.prev_rest_seconds BETWEEN (8*3600 - (:near_eight_minutes*60)) AND (8*3600 + (:near_eight_minutes*60))
     -- only warn for assignments that START on the selected day in APP_TZ
-    AND ((r.start_at AT TIME ZONE 'UTC' AT TIME ZONE :tz)::date = :day_date)
+    AND ((r.start_at)::date = :day_date)
 ),
 single_eight_cte AS (
   -- REST (orange): a single ~8h rest (current ~8h but previous rest is NOT ~8h)
@@ -119,7 +116,7 @@ single_eight_cte AS (
       OR r.prev_rest_seconds > (8*3600 + (:near_eight_minutes*60))
     )
     -- only warn for assignments that START on the selected day in APP_TZ
-    AND ((r.start_at AT TIME ZONE 'UTC' AT TIME ZONE :tz)::date = :day_date)
+    AND ((r.start_at)::date = :day_date)
 ),
 restricted_cte AS (
   SELECT
@@ -136,8 +133,8 @@ SELECT
   s.name AS soldier_name,
   m.id   AS mission_id,
   m.name AS mission_name,
-  (x.start_at AT TIME ZONE 'UTC' AT TIME ZONE :tz) AS start_at_local,
-  (x.end_at   AT TIME ZONE 'UTC' AT TIME ZONE :tz) AS end_at_local,
+  (x.start_at) AS start_at_local,
+  (x.end_at) AS end_at_local,
   NULL::text AS details,
   x.assignment_id AS assignment_id,
   'ORANGE' AS level
@@ -154,10 +151,10 @@ SELECT
   s.name    AS soldier_name,
   m.id      AS mission_id,
   m.name    AS mission_name,
-  (x.start_at AT TIME ZONE 'UTC' AT TIME ZONE :tz) AS start_at_local,
-  (x.end_at   AT TIME ZONE 'UTC' AT TIME ZONE :tz) AS end_at_local,
+  (x.start_at) AS start_at_local,
+  (x.end_at) AS end_at_local,
   ('Overlaps with previous assignment ending at ' ||
-   to_char(x.prev_end_at AT TIME ZONE 'UTC' AT TIME ZONE :tz, 'YYYY-MM-DD HH24:MI')) AS details,
+   to_char(x.prev_end_at, 'YYYY-MM-DD HH24:MI')) AS details,
   x.assignment_id AS assignment_id,
   'RED' AS level
 FROM overlap_cte x
@@ -173,8 +170,8 @@ SELECT
   s.name  AS soldier_name,
   m.id    AS mission_id,
   m.name  AS mission_name,
-  (x.start_at AT TIME ZONE 'UTC' AT TIME ZONE :tz) AS start_at_local,
-  (x.end_at   AT TIME ZONE 'UTC' AT TIME ZONE :tz) AS end_at_local,
+  (x.start_at) AS start_at_local,
+  (x.end_at) AS end_at_local,
   ('Rest between missions is ' ||
     to_char((x.start_at - x.prev_end_at), 'HH24:MI')) AS details,
   x.assignment_id AS assignment_id,
@@ -192,8 +189,8 @@ SELECT
   s.name  AS soldier_name,
   m.id    AS mission_id,
   m.name  AS mission_name,
-  (d.start_at AT TIME ZONE 'UTC' AT TIME ZONE :tz) AS start_at_local,
-  (d.end_at   AT TIME ZONE 'UTC' AT TIME ZONE :tz) AS end_at_local,
+  (d.start_at) AS start_at_local,
+  (d.end_at) AS end_at_local,
   ('Two consecutive ~8h rests: ' ||
     to_char((d.start_at - d.prev_end_at), 'HH24:MI') || ' and ' ||
     to_char(((d.prev_rest_seconds::int || ' seconds')::interval), 'HH24:MI')
@@ -213,8 +210,8 @@ SELECT
   s.name  AS soldier_name,
   m.id    AS mission_id,
   m.name  AS mission_name,
-  (d.start_at AT TIME ZONE 'UTC' AT TIME ZONE :tz) AS start_at_local,
-  (d.end_at   AT TIME ZONE 'UTC' AT TIME ZONE :tz) AS end_at_local,
+  (d.start_at) AS start_at_local,
+  (d.end_at) AS end_at_local,
   ('Rest between missions is ' ||
     to_char((d.start_at - d.prev_end_at), 'HH24:MI')) AS details,
   d.assignment_id AS assignment_id,
@@ -226,33 +223,28 @@ JOIN missions m ON m.id = d.mission_id
 ORDER BY type ASC, soldier_name ASC, start_at_local DESC
 """
 
-def _local_midnight_bounds(day_str: str, tz_name: str) -> tuple[datetime, datetime]:
-  """
-  Interpret `day_str` (YYYY-MM-DD) in APP_TZ and return (start_utc, end_utc).
-  We avoid OS tz DB complications by using SQL for display; here we only need UTC bounds.
-  """
+def _local_midnight_bounds(day_str: str) -> tuple[datetime, datetime]:
   try:
     d = date.fromisoformat(day_str)
   except ValueError:
     raise HTTPException(status_code=400, detail="Invalid day format, expected YYYY-MM-DD")
-  start_local = datetime(d.year, d.month, d.day, 0, 0, 0, tzinfo=_TZ)
+  start_local = datetime(d.year, d.month, d.day, 0, 0, 0)
   end_local = start_local + timedelta(days=1)
-  return start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc)
+  return start_local, end_local
 
 @router.get("/warnings", response_model=List[WarningItem])
 def get_warnings(
     db: Session = Depends(get_db),
     day: str = Query(..., description="Plan day, format YYYY-MM-DD (interpreted in APP_TZ for display)")
 ):
-    day_start_utc, day_end_utc = _local_midnight_bounds(day, APP_TZ)
+    day_start, day_end = _local_midnight_bounds(day)
     day_date = date.fromisoformat(day)
 
     rows = db.execute(
         text(SQL),
         {
-            "day_start_utc": day_start_utc,
-            "day_end_utc": day_end_utc,
-            "tz": APP_TZ,
+            "day_start": day_start,
+            "day_end": day_end,
             "day_date": day_date,
             "near_eight_minutes": NEAR_EIGHT_MINUTES,
         },
@@ -260,6 +252,13 @@ def get_warnings(
 
     out: List[WarningItem] = []
     for r in rows:
+        # Convert datetime to isoformat string (no timezone)
+        start_at_val = r["start_at_local"]
+        end_at_val = r["end_at_local"]
+        
+        start_at_str = start_at_val.isoformat(timespec="seconds") if isinstance(start_at_val, datetime) else str(start_at_val)
+        end_at_str = end_at_val.isoformat(timespec="seconds") if isinstance(end_at_val, datetime) else str(end_at_val)
+        
         out.append(
             WarningItem(
                 type=r["type"],
@@ -267,8 +266,8 @@ def get_warnings(
                 soldier_name=r["soldier_name"],
                 mission_id=r["mission_id"],
                 mission_name=r["mission_name"],
-                start_at=str(r["start_at_local"]),
-                end_at=str(r["end_at_local"]),
+                start_at=start_at_str,
+                end_at=end_at_str,
                 details=r["details"],
                 assignment_id=r.get("assignment_id"),
                 level=r.get("level"),

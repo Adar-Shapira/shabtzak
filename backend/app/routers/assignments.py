@@ -1,7 +1,7 @@
 # backend/app/routers/assignments.py
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, time
 from typing import Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Body
@@ -18,34 +18,20 @@ from app.models.role import Role
 from app.models.soldier import Soldier
 from app.models.soldier_mission_restriction import SoldierMissionRestriction
 
-from zoneinfo import ZoneInfo
-import os
 from math import floor
 
 from sqlalchemy.sql import expression as sql
 
-import os
-from datetime import datetime, date, timedelta, timezone
-from zoneinfo import ZoneInfo
-
-
-LOCAL_TZ = ZoneInfo(os.getenv("APP_TZ", "UTC"))
 router = APIRouter(prefix="/assignments", tags=["assignments"])
 
-APP_TZ = os.getenv("APP_TZ", "UTC")
-_LOCAL_TZ = ZoneInfo(APP_TZ)
-
 def _local_midnight_bounds(day_str: str) -> tuple[datetime, datetime]:
-    """
-    Interpret `day_str` (YYYY-MM-DD) in APP_TZ and return (start_utc, end_utc).
-    """
     try:
         d = date.fromisoformat(day_str)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid day format, expected YYYY-MM-DD")
-    start_local = datetime(d.year, d.month, d.day, 0, 0, 0, tzinfo=_LOCAL_TZ)
+    start_local = datetime(d.year, d.month, d.day, 0, 0, 0)
     end_local = start_local + timedelta(days=1)
-    return start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc)
+    return start_local, end_local
 
 class RosterItem(BaseModel):
     id: int
@@ -53,8 +39,8 @@ class RosterItem(BaseModel):
     role: Optional[str] = None
     soldier_id: Optional[int] = None
     soldier_name: str
-    start_at: datetime
-    end_at: datetime
+    start_at: str
+    end_at: str
     start_local: str
     end_local: str
     start_epoch_ms: int
@@ -65,28 +51,30 @@ class RosterResponse(BaseModel):
     day: str
     items: List[RosterItem]
     mission: Optional[dict] = None  # kept for backward compatibility when mission_id is provided
-
-def _to_local(dt: datetime) -> datetime:
-    return dt.astimezone(LOCAL_TZ)
-
-def _fmt_local(dt: datetime) -> str:
-    # ISO with offset (e.g. 2025-10-19T09:00:00+03:00)
-    return _to_local(dt).isoformat(timespec="seconds")
+    
+def _naive(dt: datetime) -> datetime:
+    return dt if dt.tzinfo is None else dt.replace(tzinfo=None)
 
 def _epoch_ms(dt: datetime) -> int:
-    return int(dt.timestamp() * 1000)
+    """Calculate epoch milliseconds from naive datetime without timezone conversion."""
+    d = _naive(dt)
+    epoch = datetime(1970, 1, 1)
+    return int((d - epoch).total_seconds() * 1000)
+
+def _naive_timestamp(dt: datetime) -> int:
+    """Calculate timestamp from naive datetime without timezone conversion."""
+    d = _naive(dt)
+    epoch = datetime(1970, 1, 1)
+    return int((d - epoch).total_seconds())
 
 def _day_bounds(day_str: str) -> tuple[datetime, datetime]:
-    # interpret "day" as local calendar day, convert to UTC for the query
     try:
         the_day = date.fromisoformat(day_str)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid day format; expected YYYY-MM-DD")
-
-    start_local = datetime(the_day.year, the_day.month, the_day.day, tzinfo=LOCAL_TZ)
+    start_local = datetime(the_day.year, the_day.month, the_day.day)
     end_local = start_local + timedelta(days=1)
-    return start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc)
-
+    return start_local, end_local
 
 @router.get("/roster", response_model=RosterResponse)
 def roster(
@@ -118,8 +106,6 @@ def roster(
 
     items: List[RosterItem] = []
     for a in rows:
-        s_local = a.start_at.astimezone(LOCAL_TZ)
-        e_local = a.end_at.astimezone(LOCAL_TZ)
         items.append(
             RosterItem(
                 id=a.id,
@@ -127,12 +113,12 @@ def roster(
                 role=a.role.name if a.role else None,
                 soldier_id=a.soldier.id if a.soldier else None,
                 soldier_name=a.soldier.name if a.soldier else "",
-                start_at=a.start_at,
-                end_at=a.end_at,
-                start_local=s_local.isoformat(),
-                end_local=e_local.isoformat(),
-                start_epoch_ms=int(a.start_at.timestamp() * 1000),
-                end_epoch_ms=int(a.end_at.timestamp() * 1000),
+                start_at=_naive(a.start_at).isoformat(timespec="seconds"),
+                end_at=_naive(a.end_at).isoformat(timespec="seconds"),
+                start_local=_naive(a.start_at).isoformat(timespec="seconds"),
+                end_local=_naive(a.end_at).isoformat(timespec="seconds"),
+                start_epoch_ms=_epoch_ms(a.start_at),
+                end_epoch_ms=_epoch_ms(a.end_at),
             )
         )
 
@@ -159,12 +145,13 @@ def clear_plan(payload: dict, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Missing 'day'")
 
     mission_ids = payload.get("mission_ids") or None
-    day_start_utc, day_end_utc = _local_midnight_bounds(day)
+    day_start, day_end = _local_midnight_bounds(day)
 
     conds = [
-        Assignment.start_at >= day_start_utc,
-        Assignment.start_at <  day_end_utc,
+        Assignment.start_at >= day_start,
+        Assignment.start_at <  day_end,
     ]
+
     if mission_ids:
         conds.append(Assignment.mission_id.in_(mission_ids))
 
@@ -178,8 +165,8 @@ class DayRosterItem(BaseModel):
     role: str | None = None
     soldier_id: Optional[int] = None
     soldier_name: str
-    start_at: datetime
-    end_at: datetime
+    start_at: str
+    end_at: str
     start_local: str
     end_local: str
     start_epoch_ms: int
@@ -190,14 +177,13 @@ class DayRosterResponse(BaseModel):
     items: List[DayRosterItem]
 
 def _bounds_for_day(day_str: str) -> tuple[datetime, datetime]:
-    # same logic as _day_bounds, kept for day_roster
     try:
         d = date.fromisoformat(day_str)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid day format; expected YYYY-MM-DD")
-    start_local = datetime(d.year, d.month, d.day, tzinfo=LOCAL_TZ)
+    start_local = datetime(d.year, d.month, d.day)
     end_local = start_local + timedelta(days=1)
-    return start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc)
+    return start_local, end_local
 
 @router.get("/day-roster", response_model=DayRosterResponse)
 def day_roster(
@@ -227,8 +213,6 @@ def day_roster(
 
     items: List[DayRosterItem] = []
     for a in rows:
-        s_local = a.start_at.astimezone(LOCAL_TZ)
-        e_local = a.end_at.astimezone(LOCAL_TZ)
         items.append(
             DayRosterItem(
                 id=a.id,
@@ -236,14 +220,15 @@ def day_roster(
                 role=a.role.name if a.role else None,
                 soldier_id=a.soldier.id if a.soldier else None,
                 soldier_name=a.soldier.name if a.soldier else "",
-                start_at=a.start_at,
-                end_at=a.end_at,
-                start_local=s_local.isoformat(),
-                end_local=e_local.isoformat(),
-                start_epoch_ms=int(a.start_at.timestamp() * 1000),
-                end_epoch_ms=int(a.end_at.timestamp() * 1000),
+                start_at=_naive(a.start_at).isoformat(timespec="seconds"),
+                end_at=_naive(a.end_at).isoformat(timespec="seconds"),
+                start_local=_naive(a.start_at).isoformat(timespec="seconds"),
+                end_local=_naive(a.end_at).isoformat(timespec="seconds"),
+                start_epoch_ms=_epoch_ms(a.start_at),
+                end_epoch_ms=_epoch_ms(a.end_at),
             )
         )
+
     return DayRosterResponse(day=day, items=items)
 
 class ReassignRequest(BaseModel):
@@ -295,8 +280,12 @@ def reassign_assignment(body: ReassignRequest, db: Session = Depends(get_db)):
 
     db.refresh(a)
 
-    start_local = a.start_at.astimezone(timezone.utc).isoformat()
-    end_local   = a.end_at.astimezone(timezone.utc).isoformat()
+    start_local = _naive(a.start_at).isoformat(timespec="seconds")
+    end_local   = _naive(a.end_at).isoformat(timespec="seconds")
+    
+    # Convert to string for JSON serialization without timezone shifts
+    start_at_str = _naive(a.start_at).isoformat(timespec="seconds")
+    end_at_str = _naive(a.end_at).isoformat(timespec="seconds")
 
     return {
         "id": a.id,
@@ -304,12 +293,12 @@ def reassign_assignment(body: ReassignRequest, db: Session = Depends(get_db)):
         "role": a.role.name if a.role else None,
         "soldier_id": a.soldier_id,
         "soldier_name": a.soldier.name if a.soldier else "",
-        "start_at": a.start_at,
-        "end_at": a.end_at,
+        "start_at": start_at_str,
+        "end_at": end_at_str,
         "start_local": start_local,
         "end_local": end_local,
-        "start_epoch_ms": int(a.start_at.timestamp() * 1000),
-        "end_epoch_ms": int(a.end_at.timestamp() * 1000),
+        "start_epoch_ms": _epoch_ms(a.start_at),
+        "end_epoch_ms": _epoch_ms(a.end_at),
         "warnings": ([warning_restriction] if warning_restriction else []),
     }
 
@@ -324,11 +313,21 @@ class CreateAssignmentRequest(BaseModel):
 def _with_seconds(x: str) -> str:
     return x if len(x) >= 8 else (x + ":00")
 
+def _parse_time(hms: str) -> time:
+    parts = [int(p) for p in hms.split(":")]
+    if len(parts) == 2:
+        parts.append(0)
+    return time(parts[0], parts[1], parts[2])
+
 @router.post("/create")
 def create_assignment(body: CreateAssignmentRequest, db: Session = Depends(get_db)):
     # compute window in UTC using your existing helper
     the_day = date.fromisoformat(body.day)
-    start_at, end_at = Assignment.window_for(_with_seconds(body.start_time), _with_seconds(body.end_time), the_day)
+    start_at, end_at = Assignment.window_for(
+        _parse_time(_with_seconds(body.start_time)),
+        _parse_time(_with_seconds(body.end_time)),
+        the_day
+    )
 
     # If your schema requires soldier_id NOT NULL, reject null soldier_id:
     if body.soldier_id is None:
@@ -347,8 +346,12 @@ def create_assignment(body: CreateAssignmentRequest, db: Session = Depends(get_d
     db.commit()
     db.refresh(a)
 
-    s_local = a.start_at.astimezone(LOCAL_TZ).isoformat()
-    e_local = a.end_at.astimezone(LOCAL_TZ).isoformat()
+    start_local = _naive(a.start_at).isoformat(timespec="seconds")
+    end_local   = _naive(a.end_at).isoformat(timespec="seconds")
+    
+    # Convert to string for JSON serialization without timezone shifts
+    start_at_str = _naive(a.start_at).isoformat(timespec="seconds")
+    end_at_str = _naive(a.end_at).isoformat(timespec="seconds")
 
     return {
         "id": a.id,
@@ -356,12 +359,12 @@ def create_assignment(body: CreateAssignmentRequest, db: Session = Depends(get_d
         "role": a.role.name if a.role else None,
         "soldier_id": a.soldier_id,
         "soldier_name": a.soldier.name if a.soldier else "",
-        "start_at": a.start_at,
-        "end_at": a.end_at,
-        "start_local": s_local,
-        "end_local": e_local,
-        "start_epoch_ms": int(a.start_at.timestamp() * 1000),
-        "end_epoch_ms": int(a.end_at.timestamp() * 1000),
+        "start_at": start_at_str,
+        "end_at": end_at_str,
+        "start_local": start_local,
+        "end_local": end_local,
+        "start_epoch_ms": _epoch_ms(a.start_at),
+        "end_epoch_ms": _epoch_ms(a.end_at),
     }
 
 @router.delete("/{assignment_id}")

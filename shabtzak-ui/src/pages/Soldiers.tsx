@@ -822,7 +822,6 @@ export default function SoldiersPage() {
                         <tbody>
                         {vacations.map((v) => (
                             <tr key={v.id} style={{ borderTop: "1px solid #eee" }}>
-                            <td>{v.id}</td>
                             <td>{v.start_date}</td>
                             <td>{v.end_date}</td>
                             <td>{v.note ?? <span style={{ opacity: 0.6 }}>(אין)</span>}</td>

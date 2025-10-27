@@ -55,31 +55,14 @@ function humanError(e: any, fallback: string) {
   return fallback;
 }
 
-const APP_TZ = (import.meta as any)?.env?.VITE_APP_TZ || "UTC";
-
-// Format "YYYY-MM-DD HH:mm" from epoch ms in a specific TZ
-function formatYMDHMFromMs(ms: number, tz: string) {
+// Expect to receive a string elsewhere; if you truly only have ms, we’ll format ISO and slice without TZ math.
+function formatYMDHMFromMs(ms: number) {
   try {
-    const d = new Date(ms);
-    const parts = new Intl.DateTimeFormat(undefined, {
-      timeZone: tz,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-    }).formatToParts(d);
-
-    const get = (t: Intl.DateTimeFormatPartTypes) => parts.find(p => p.type === t)?.value ?? "";
-    const yyyy = get("year");
-    const mm = get("month");
-    const dd = get("day");
-    const hh = get("hour");
-    const min = get("minute");
-    return `${yyyy}-${mm}-${dd} ${hh}:${min}`;
+    // Use ISO UTC and slice; this avoids locale/TZ shifts.
+    const iso = new Date(ms).toISOString();           // YYYY-MM-DDTHH:MM:SS.sssZ
+    return `${iso.slice(0, 10)} ${iso.slice(11, 16)}`; // "YYYY-MM-DD HH:MM"
   } catch {
-    return new Date(ms).toISOString();
+    return new Date(ms).toISOString().slice(0, 16).replace("T", " ");
   }
 }
 
@@ -91,38 +74,31 @@ async function fillPlanForDay(
   await api.post("/plan/fill", { day: forDay, replace, ...(opts || {}) });
 }
 
-// Format to "YYYY-MM-DD HH:mm" in a specific TZ using Intl parts
-function formatYMDHM(dtIso: string, fallbackTz: string) {
-  try {
-    const d = new Date(dtIso);
-    const parts = new Intl.DateTimeFormat(undefined, {
-      timeZone: fallbackTz,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-    }).formatToParts(d);
-
-    const get = (t: Intl.DateTimeFormatPartTypes) =>
-      parts.find(p => p.type === t)?.value ?? "";
-
-    // Many locales emit different separators; assemble explicitly:
-    const yyyy = get("year");
-    const mm = get("month");
-    const dd = get("day");
-    const hh = get("hour");
-    const min = get("minute");
-    return `${yyyy}-${mm}-${dd} ${hh}:${min}`;
-  } catch {
-    return dtIso;
+// Literal extractor: "YYYY-MM-DD HH:MM" from a timestamp string (ISO or "YYYY-MM-DD HH:MM[:SS]")
+// No timeZone conversions.
+function formatYMDHM(dtIso: string) {
+  if (typeof dtIso === "string") {
+    const s = dtIso.replace(" ", "T");
+    // prefer the literal bits present in the string
+    const datePart = s.slice(0, 10);
+    const m = s.match(/T(\d{2}):(\d{2})/);
+    if (datePart && m) return `${datePart} ${m[1]}:${m[2]}`;
+    // fallback: try to extract directly from string without parsing
+    if (s.length >= 16) {
+      const datePart2 = s.slice(0, 10);
+      const timePart2 = s.slice(11, 16);
+      return `${datePart2} ${timePart2}`;
+    }
   }
+  return dtIso;
 }
 
 // Robust epoch getter (uses server epoch if present)
 function epochMs(iso: string, serverEpoch?: number) {
-  return typeof serverEpoch === "number" ? serverEpoch : new Date(iso).getTime();
+  // Always prefer server-provided epoch to avoid timezone conversion
+  if (typeof serverEpoch === "number") return serverEpoch;
+  // For naive datetimes without server epoch, fall back to Date parsing (but prefer server epoch)
+  return new Date(iso).getTime();
 }
 
 // Stable slot key for grouping (mission + exact window)
@@ -179,9 +155,7 @@ function guessRoleFromMissionName(missionName?: string | null): string | null {
   return null;
 }
 
-// Pretty-print a warning's time window by matching it to the configured MissionSlot for the selected day.
-// Falls back to APP_TZ formatting if no slot overlaps.
-const fmtWarn = (iso: string) => formatYMDHM(iso, APP_TZ);
+const fmtWarn = (iso: string) => formatYMDHM(iso);
 
 function WarningPill({ type, color }: { type: string; color?: "red" | "orange" | "gray" }) {
   const style =
@@ -458,18 +432,23 @@ async function shufflePlanner() {
         )
       );
 
-      // Helper: HH:MM in app tz from ISO
+      // Helper: HH:MM taken verbatim from the timestamp string (no TZ conversion)
       const hhmmFrom = (isoLike: string) => {
-        const dt = new Date(isoLike);
-        const parts = new Intl.DateTimeFormat(undefined, {
-          timeZone: APP_TZ,
-          hour: "2-digit",
-          minute: "2-digit",
-          hour12: false,
-        }).formatToParts(dt);
-        const get = (t: Intl.DateTimeFormatPartTypes) =>
-          parts.find((p) => p.type === t)?.value ?? "";
-        return `${get("hour")}:${get("minute")}`;
+        // Accepts: "YYYY-MM-DDTHH:MM:SS", "YYYY-MM-DD HH:MM[:SS]", or full ISO with offset
+        // Prefer extracting the literal clock time as written.
+        if (typeof isoLike === "string") {
+          // Normalize space to 'T' for patterns like "YYYY-MM-DD HH:MM"
+          const s = isoLike.replace(" ", "T");
+          // Match "...T HH:MM"
+          const m = s.match(/T(\d{2}):(\d{2})/);
+          if (m) return `${m[1]}:${m[2]}`;
+        }
+        // Fallback: let Date parse and take UTC HH:MM (stable fallback)
+        try {
+          return new Date(isoLike).toISOString().slice(11, 16);
+        } catch {
+          return "00:00";
+        }
       };
 
       // Parse "HH:MM-HH:MM" -> minutes since midnight for start & end
@@ -1612,15 +1591,8 @@ async function shufflePlanner() {
 
 function hmFromMs(ms: number): string {
   try {
-    const d = new Date(ms);
-    const parts = new Intl.DateTimeFormat(undefined, {
-      timeZone: APP_TZ,
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-    }).formatToParts(d);
-    const get = (t: Intl.DateTimeFormatPartTypes) => parts.find(p => p.type === t)?.value ?? "";
-    return `${get("hour")}:${get("minute")}`;
+    // UTC slice, no TZ math
+    return new Date(ms).toISOString().slice(11, 16);
   } catch {
     return "00:00";
   }
@@ -1916,7 +1888,7 @@ function formatWarningDetails(w: PlannerWarning): string {
                   )}
 
                   <h3 className="text-lg font-semibold" style={{ marginBottom: 8 }}>
-                    בחופשה בתאיך {day} ({vacationSoldiers.length})
+                    בחופשה בתאריך {day} ({vacationSoldiers.length})
                   </h3>
 
                   {vacationSoldiers.length === 0 ? (

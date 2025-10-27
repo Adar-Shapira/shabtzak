@@ -1,7 +1,7 @@
 # backend/app/routers/planning.py
 from __future__ import annotations
 
-from datetime import datetime, date, timezone, timedelta
+from datetime import datetime, date, timedelta
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -18,11 +18,8 @@ from app.models.soldier import Soldier
 from app.models.soldier_mission_restriction import SoldierMissionRestriction
 from app.models.vacation import Vacation
 
-import os
-from zoneinfo import ZoneInfo
 import random
 
-LOCAL_TZ = ZoneInfo(os.getenv("APP_TZ", "UTC"))
 router = APIRouter(prefix="/plan", tags=["planning"])
 
 class FillRequest(BaseModel):
@@ -44,6 +41,8 @@ class FillResponse(BaseModel):
 class UnassignRequest(BaseModel):
     assignment_id: int
 
+def _naive(dt: datetime) -> datetime:
+    return dt if dt.tzinfo is None else dt.replace(tzinfo=None)
 
 def _parse_day(day_str: str) -> date:
     try:
@@ -52,13 +51,13 @@ def _parse_day(day_str: str) -> date:
         raise HTTPException(status_code=400, detail="Invalid day format; expected YYYY-MM-DD")
 
 def _day_bounds(d: date) -> tuple[datetime, datetime]:
-    start_local = datetime(d.year, d.month, d.day, tzinfo=LOCAL_TZ)
+    start_local = datetime(d.year, d.month, d.day)
     end_local = start_local + timedelta(days=1)
-    return start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc)
+    return start_local, end_local
 
 def _slot_bucket(dt: datetime) -> str:
-    """Return a coarse time-slot bucket in LOCAL_TZ based on start time."""
-    h = dt.astimezone(LOCAL_TZ).hour
+    """Return a coarse time-slot bucket based on naive hour."""
+    h = dt.hour
     if 6 <= h < 14:
         return "MORNING"
     if 14 <= h < 22:
@@ -86,7 +85,7 @@ def _vacation_blocks_for_day(db: Session, the_day: date) -> Dict[int, List[tuple
         )
     ).scalars().all()
 
-    day_start_local = datetime(the_day.year, the_day.month, the_day.day, 0, 0, 0, tzinfo=LOCAL_TZ)
+    day_start_local = datetime(the_day.year, the_day.month, the_day.day, 0, 0, 0)
     day_end_local = day_start_local + timedelta(days=1)
 
     for v in vacs:
@@ -95,28 +94,20 @@ def _vacation_blocks_for_day(db: Session, the_day: date) -> Dict[int, List[tuple
         if v.start_date < the_day < v.end_date:
             block_start_local = day_start_local
             block_end_local = day_end_local
-            blocks.setdefault(s_id, []).append(
-                (block_start_local.astimezone(timezone.utc), block_end_local.astimezone(timezone.utc))
-            )
+            blocks.setdefault(s_id, []).append((block_start_local, block_end_local))
         elif v.start_date == the_day == v.end_date:
             # Single-day vacation → block only from 14:00 local to end-of-day
             block_start_local = day_start_local.replace(hour=14, minute=0, second=0, microsecond=0)
             block_end_local = day_end_local
-            blocks.setdefault(s_id, []).append(
-                (block_start_local.astimezone(timezone.utc), block_end_local.astimezone(timezone.utc))
-            )
+            blocks.setdefault(s_id, []).append((block_start_local, block_end_local))
         elif v.start_date == the_day and v.end_date > the_day:
             block_start_local = day_start_local.replace(hour=14, minute=0, second=0, microsecond=0)
             block_end_local = day_end_local
-            blocks.setdefault(s_id, []).append(
-                (block_start_local.astimezone(timezone.utc), block_end_local.astimezone(timezone.utc))
-            )
+            blocks.setdefault(s_id, []).append((block_start_local, block_end_local))
         elif v.end_date == the_day and v.start_date < the_day:
             block_start_local = day_start_local
             block_end_local = day_start_local.replace(hour=14, minute=0, second=0, microsecond=0)
-            blocks.setdefault(s_id, []).append(
-                (block_start_local.astimezone(timezone.utc), block_end_local.astimezone(timezone.utc))
-            )
+            blocks.setdefault(s_id, []).append((block_start_local, block_end_local))
         # All other cases do not create a block on this specific day
 
     return blocks
@@ -257,33 +248,33 @@ def _build_pair_counts(recent: List[Assignment]) -> Dict[int, Dict[int, int]]:
 def _build_soldier_stats(recent: List[Assignment], day_start: datetime, day_end: datetime) -> Dict[int, SoldierStats]:
     stats: Dict[int, SoldierStats] = {}
     for a in recent:
+        sa = _naive(a.start_at)
+        ea = _naive(a.end_at)
         s_id = a.soldier_id
         st = stats.setdefault(s_id, SoldierStats())
 
         # last_end_at: keep the latest assignment end strictly before day_start
-        if a.end_at <= day_start:
-            if st.last_end_at is None or a.end_at > st.last_end_at:
-                st.last_end_at = a.end_at
+        if ea <= day_start:
+            if st.last_end_at is None or ea > st.last_end_at:
+                st.last_end_at = ea
 
-        # today_count: count assignments that overlap the selected day
-        if not (a.end_at <= day_start or a.start_at >= day_end):
-            # overlaps the day window → counts as "today"
+        # today_count: overlaps the selected day
+        if not (ea <= day_start or sa >= day_end):
             st.today_count += 1
 
         # total hours in lookback window
-        # intersect assignment with [day_start - window, day_end] for fair hours rounding
         window_start = day_start - timedelta(days=FAIRNESS_WINDOW_DAYS)
-        seg_start = max(a.start_at, window_start)
-        seg_end = min(a.end_at, day_end)
+        seg_start = max(sa, window_start)
+        seg_end = min(ea, day_end)
         if seg_end > seg_start:
             st.total_hours_window += (seg_end - seg_start).total_seconds() / 3600.0
 
-        # mission rotation stats in lookback window
-        if a.start_at < day_end and a.end_at > (day_start - timedelta(days=FAIRNESS_WINDOW_DAYS)):
+        # mission rotation stats
+        if sa < day_end and ea > (day_start - timedelta(days=FAIRNESS_WINDOW_DAYS)):
             st.mission_count[a.mission_id] = st.mission_count.get(a.mission_id, 0) + 1
             st.recent_missions.add(a.mission_id)
 
-        bucket = _slot_bucket(a.start_at)
+        bucket = _slot_bucket(sa)
         st.slot_bucket_count[bucket] = st.slot_bucket_count.get(bucket, 0) + 1
 
     return stats
@@ -434,6 +425,8 @@ def _collect_candidates_for_slot(
 ) -> List[tuple[float, int, Soldier]]:
     """Return scored candidates. If strict=False, relax the 8h rest checks."""
     scored: List[tuple[float, int, Soldier]] = []
+    start_at = _naive(start_at)
+    end_at   = _naive(end_at)
     for i, cand in enumerate(pool):
         # never violate hard constraints
         if (cand.id, m_id) in restricted_pairs:
@@ -500,8 +493,9 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
         rng.shuffle(ctx["all_soldiers"])
 
     # Exact-window duplicates that already exist today
-    existing_same_window: set[tuple[int, datetime, datetime]] = set(
-        db.execute(
+    existing_same_window = set(
+        (sid, _naive(s_at), _naive(e_at))
+        for sid, s_at, e_at in db.execute(
             select(Assignment.soldier_id, Assignment.start_at, Assignment.end_at)
             .where(Assignment.start_at < day_end)
             .where(Assignment.end_at > day_start)
@@ -515,7 +509,8 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
         .where(Assignment.start_at < day_end)
         .where(Assignment.end_at > day_start)
     ).all():
-        occupied_by_soldier.setdefault(sid, []).append((s_at, e_at))
+        s_na, e_na = _naive(s_at), _naive(e_at)
+        occupied_by_soldier.setdefault(sid, []).append((s_na, e_na))
 
     # (Optional but recommended) Restrictions lookup
     restricted_pairs: set[tuple[int, int]] = set(
@@ -551,21 +546,25 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
                     )
                 )
             )
+
             # Rebuild lookups from DB after delete
             existing_same_window = set(
-                db.execute(
+                (sid, _naive(s_at), _naive(e_at))
+                for sid, s_at, e_at in db.execute(
                     select(Assignment.soldier_id, Assignment.start_at, Assignment.end_at)
                     .where(Assignment.start_at < day_end)
                     .where(Assignment.end_at > day_start)
                 ).all()
             )
-            occupied_by_soldier.clear()
+
+            occupied_by_soldier: Dict[int, List[tuple[datetime, datetime]]] = {}
             for sid, s_at, e_at in db.execute(
                 select(Assignment.soldier_id, Assignment.start_at, Assignment.end_at)
                 .where(Assignment.start_at < day_end)
                 .where(Assignment.end_at > day_start)
             ).all():
-                occupied_by_soldier.setdefault(sid, []).append((s_at, e_at))                                                                                                                            
+                s_na, e_na = _naive(s_at), _naive(e_at)
+                occupied_by_soldier.setdefault(sid, []).append((s_na, e_na))
 
     # ----------------------------
     # Phase 1: assign REQUIRED roles across all missions and slots
