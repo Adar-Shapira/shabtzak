@@ -496,6 +496,12 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
     recent_assignments = _fetch_recent_assignments(db, day_start_aware, day_end_aware)
     stats_by_soldier = _build_soldier_stats(recent_assignments, day_start, day_end)
     pair_counts = _build_pair_counts(recent_assignments)
+    
+    if req.exclude_slots:
+        print(f"[DEBUG] Total excluded slots: {len(req.exclude_slots)}")
+        print(f"[DEBUG] Excluded slots: {req.exclude_slots}")
+    if req.locked_assignments:
+        print(f"[DEBUG] Locked assignment IDs: {req.locked_assignments}")
 
     # Optional shuffle: produce a different yet valid plan
     if req.random_seed is not None:
@@ -762,19 +768,100 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
                 for r in sorted(reqs, key=lambda x: (x.role.name if x.role else "", x.role_id if hasattr(x, 'role_id') else 0)):
                     if r.count and r.count > 0:
                         explicit_roles_list.extend([r.role_id] * r.count)
-                generic_position = len(explicit_roles_list)
                 
-                for i in range(generic_count):
+                # Get existing generic assignments for this time slot
+                existing_generic = db.execute(
+                    select(Assignment)
+                    .where(Assignment.mission_id == m.id)
+                    .where(Assignment.role_id == None)
+                    .where(Assignment.start_at == start_at)
+                    .where(Assignment.end_at == end_at)
+                    .where(Assignment.start_at >= day_start_aware)
+                    .where(Assignment.start_at < day_end_aware)
+                ).scalars().all()
+                
+                # Get the IDs of locked generic assignments
+                locked_generic_ids = set()
+                if req.locked_assignments:
+                    locked_generic_ids = set(req.locked_assignments)
+                
+                # Count how many existing generic slots are locked (won't be deleted)
+                locked_generic_count = sum(1 for a in existing_generic if a.id in locked_generic_ids)
+                
+                # IMPORTANT: The UI generates exclusion keys with positions that include locked slots
+                # So we need to check each position in sequence and skip locked ones
+                # Start checking from the first generic position
+                current_generic_position = len(explicit_roles_list)
+                
+                # Track how many slots we've created in this iteration
+                slots_created_this_iteration = 0
+                
+                # Count how many exclusion keys exist for this time slot and mission
+                exclusion_keys_for_this_slot = []
+                if req.exclude_slots:
+                    slot_key_prefix = f"{m.id}_GENERIC_{start_at.isoformat()}:00_{end_at.isoformat()}:00"
+                    exclusion_keys_for_this_slot = [k for k in req.exclude_slots if k.startswith(slot_key_prefix)]
+                
+                # Count how many positions in the first generic_count positions are excluded
+                excluded_in_valid_range = 0
+                for pos in range(generic_count):
+                    position_to_check = len(explicit_roles_list) + pos
+                    start_str = f"{start_at.isoformat()}:00"
+                    end_str = f"{end_at.isoformat()}:00"
+                    key_for_pos = f"{m.id}_GENERIC_{start_str}_{end_str}_{position_to_check}"
+                    if req.exclude_slots and key_for_pos in req.exclude_slots:
+                        excluded_in_valid_range += 1
+                
+                print(f"[DEBUG Phase2] Mission {m.id}: generic_count={generic_count}, existing_locked={len(existing_generic)}, excluded_in_range={excluded_in_valid_range}")
+                
+                # We need: (generic_count) total slots
+                # We have: (existing_locked) locked slots + (slots_created) newly created
+                # We exclude: (excluded_in_valid_range) positions that should remain empty
+                # So: existing_locked + slots_created + excluded_in_valid_range should be <= generic_count
+                # This means we should only create until: existing_locked + created + excluded >= generic_count
+                # Or: slots_created >= generic_count - existing_locked - excluded_in_valid_range
+                
+                # Check positions sequentially until we've filled the requirement
+                # Formula: generic_count = existing_locked + newly_created + (excluded positions that will remain empty)
+                # So: we need to create: generic_count - existing_locked new assignments
+                # BUT if positions in the first generic_count are excluded, we don't need to fill them
+                # So the minimum to create is: generic_count - existing_locked - excluded_in_valid_range
+                min_to_create = generic_count - len(existing_generic) - excluded_in_valid_range
+                print(f"[DEBUG Phase2] Need to create at least {min_to_create} new assignments (total={generic_count}, locked={len(existing_generic)}, excluded={excluded_in_valid_range})")
+                
+                for i in range(generic_count * 2):  # Check more positions in case some are skipped
+                    # Stop when we've created enough
+                    if slots_created_this_iteration >= min_to_create:
+                        print(f"[DEBUG Phase2] Done: created={slots_created_this_iteration} >= min={min_to_create}")
+                        break
+                    
+                    # Don't go beyond the logical first generic_count positions within THIS time slot
+                    # Each time slot should only have generic_count generic slots
+                    # Calculate position within the generic range (0-based)
+                    position_in_generic_range = current_generic_position - len(explicit_roles_list)
+                    if position_in_generic_range >= generic_count:
+                        print(f"[DEBUG Phase2] Position {current_generic_position} (slot #{position_in_generic_range}) is beyond generic_count ({generic_count}), stopping")
+                        break
+                    
+                    slots_needed = generic_count - len(existing_generic) - slots_created_this_iteration
+                    print(f"[DEBUG Phase2] Checking position {current_generic_position} (slot {position_in_generic_range}): slots_needed={slots_needed}, existing={len(existing_generic)}, created={slots_created_this_iteration}, excluded={excluded_in_valid_range}")
+                    
                     # Check if this specific generic slot instance should be excluded
                     # Format: mission_id_GENERIC_start_at_end_at_index 
                     # The index is the absolute position across all slots (explicit + generic)
-                    # UI appends :00 to isoformat() result
-                    slot_key_base = f"{m.id}_GENERIC_{start_at.isoformat()}:00_{end_at.isoformat()}:00"
-                    slot_key_to_check = f"{slot_key_base}_{generic_position}"
+                    # Match Phase 1 format for consistency
+                    start_str = f"{start_at.isoformat()}:00"
+                    end_str = f"{end_at.isoformat()}:00"
+                    slot_key_base = f"{m.id}_GENERIC_{start_str}_{end_str}"
+                    slot_key_to_check = f"{slot_key_base}_{current_generic_position}"
                     
-                    if req.exclude_slots and slot_key_to_check in req.exclude_slots:
-                        # This specific instance is excluded - skip it
-                        generic_position += 1  # Increment even when skipped
+                    # Check if this position is excluded
+                    is_excluded = req.exclude_slots and slot_key_to_check in req.exclude_slots
+                    
+                    if is_excluded:
+                        # This position is excluded - skip it
+                        print(f"[DEBUG Phase2] SKIPPING position {current_generic_position}: EXCLUDED (key: {slot_key_to_check})")
+                        current_generic_position += 1
                         continue
                     
                     # anyone valid for the mission (any role), excluding restricted pairs
@@ -785,9 +872,10 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
 
                     # Remove anyone who is already assigned to this exact window
                     pool = [s for s in pool if (s.id, start_at, end_at) not in existing_same_window]
-
+                    
                     if not pool:
-                        generic_position += 1  # Increment even when no pool
+                        print(f"[DEBUG Phase2] No pool at position {current_generic_position} (already has assignments)")
+                        current_generic_position += 1  # Increment even when no pool
                         continue
 
                     # round-robin starting point for "generic" (key None)
@@ -813,7 +901,7 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
                     )
 
                     if not scored:
-                        generic_position += 1  # Increment even when no candidates
+                        current_generic_position += 1  # Increment even when no candidates
                         continue
 
                     # In shuffle mode, pick randomly from top candidates for variety
@@ -841,12 +929,13 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
                     )
                     db.add(a)
                     created_here += 1
+                    slots_created_this_iteration += 1
                     
-                    # Increment the generic position counter
-                    generic_position += 1
-
                     existing_same_window.add((soldier.id, start_at, end_at))
                     occupied_by_soldier.setdefault(soldier.id, []).append((start_at, end_at))
+                    
+                    # Increment the generic position counter
+                    current_generic_position += 1
 
                     st = stats_by_soldier.setdefault(soldier.id, SoldierStats())
                     _update_stats_after_assignment(st, m.id, start_at, end_at, day_start, day_end)
