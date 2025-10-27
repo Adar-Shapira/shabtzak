@@ -666,9 +666,9 @@ export default function SoldiersPage() {
                     <table width="100%" cellPadding={7} style={{ borderCollapse: "collapse" }}>
                     <thead>
                         <tr>
-                        {/*<th align="left" style={{ width: 60 }}>ID</th>*/}
-                        <th align="left">תפקיד</th>
-                        <th align="left" style={{ width: 180 }}>פעולות</th>
+                        {/*<th style={{ width: 60 }}>ID</th>*/}
+                        <th>תפקיד</th>
+                        <th style={{ width: 180 }}>פעולות</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -812,11 +812,11 @@ export default function SoldiersPage() {
                     <table width="100%" cellPadding={7} style={{ borderCollapse: "collapse" }}>
                         <thead>
                         <tr>
-                            {/*<th align="left" style={{ width: 60 }}>ID</th>*/}
-                            <th align="left" style={{ width: 140 }}>התחלה</th>
-                            <th align="left" style={{ width: 140 }}>סיום</th>
-                            <th align="left">הערות</th>
-                            <th align="left" style={{ width: 160 }}>פעולות</th>
+                            {/*<th style={{ width: 60 }}>ID</th>*/}
+                            <th style={{ width: 140 }}>התחלה</th>
+                            <th style={{ width: 140 }}>סיום</th>
+                            <th>הערות</th>
+                            <th style={{ width: 160 }}>פעולות</th>
                         </tr>
                         </thead>
                         <tbody>
@@ -895,13 +895,13 @@ export default function SoldiersPage() {
                                 <table width="100%" cellPadding={7} style={{ borderCollapse: "collapse" }}>
                                 <thead>
                                     <tr>
-                                    {/*<th align="left" style={{ width: 60 }}>ID</th>*/}
-                                    <th align="left">שם</th>
-                                    <th align="left" style={{ width: 320 }}>תפקיד</th>
-                                    <th align="left" style={{ width: 220 }}>מחלקה</th>
-                                    <th align="left" style={{ width: 260 }}>הגבלות</th>
-                                    <th align="left" style={{ width: 160 }}>חופשות</th>
-                                    <th align="left" style={{ width: 180 }}>פעולות</th>
+                                    {/*<th style={{ width: 60 }}>ID</th>*/}
+                                    <th>שם</th>
+                                    <th style={{ width: 320 }}>תפקיד</th>
+                                    <th style={{ width: 220 }}>מחלקה</th>
+                                    <th style={{ width: 260 }}>הגבלות</th>
+                                    <th style={{ width: 160 }}>חופשות</th>
+                                    <th style={{ width: 180 }}>פעולות</th>
                                     </tr>
                                 </thead>
                                 <tbody>

@@ -4,7 +4,8 @@ import { api } from "../api";
 import {
   listSoldiers,
   reassignAssignment,
-  unassignAssignment, 
+  unassignAssignment,
+  createAssignment,
   type Soldier,
   clearPlan,
   listMissions,
@@ -55,16 +56,7 @@ function humanError(e: any, fallback: string) {
   return fallback;
 }
 
-// Expect to receive a string elsewhere; if you truly only have ms, we’ll format ISO and slice without TZ math.
-function formatYMDHMFromMs(ms: number) {
-  try {
-    // Use ISO UTC and slice; this avoids locale/TZ shifts.
-    const iso = new Date(ms).toISOString();           // YYYY-MM-DDTHH:MM:SS.sssZ
-    return `${iso.slice(0, 10)} ${iso.slice(11, 16)}`; // "YYYY-MM-DD HH:MM"
-  } catch {
-    return new Date(ms).toISOString().slice(0, 16).replace("T", " ");
-  }
-}
+// ... existing code ...
 
 async function fillPlanForDay(
   forDay: string,
@@ -109,8 +101,9 @@ function slotKey(missionName: string, startMs: number, endMs: number) {
 // --- MissionRequirement helpers (schema-agnostic) ---
 function reqRoleName(r: MissionRequirement): string | null {
   const x = r as any;
-  if (x?.role?.name) return String(x.role.name);
+  // Check role_name first (this is what we get from the API)
   if (typeof x?.role_name === "string") return x.role_name;
+  if (x?.role?.name) return String(x.role.name);
   if (typeof x?.role_id === "number") return `Role #${x.role_id}`;
   return null;
 }
@@ -296,7 +289,7 @@ export default function Planner() {
   }, [visibleCandidates, candidateSearch]);
 
   async function loadDayRosterForWarnings(forDay: string) {
-    // Build YYYY-MM-DD for (day-1), day, (day+1) without relying on shiftDay’s position
+    // Build YYYY-MM-DD for (day-1), day, (day+1) without relying on shiftDay's position
     function addDays(iso: string, delta: number): string {
       const [y, m, d] = iso.split("-").map(Number);
       const dt = new Date(Date.UTC(y, (m || 1) - 1, d || 1));
@@ -600,12 +593,15 @@ async function shufflePlanner() {
     }
   }
 
-  async function loadAllAssignments() {
+  async function loadAllAssignments(overrideDay?: string) {
+    const targetDay = overrideDay ?? day;
+    console.log(`[DEBUG] loadAllAssignments: targetDay=${targetDay}, overrideDay=${overrideDay}, current day=${day}`);
     setListBusy(true);
     try {
       const { data } = await api.get<FlatRosterResp>("/assignments/roster", {
-        params: { day },
+        params: { day: targetDay },
       });
+      console.log(`[DEBUG] loadAllAssignments: loaded ${data.items.length} items`);
       setRows(data.items);
     } catch (e: any) {
       alert(humanError(e, "Failed to load assignments"));
@@ -822,7 +818,7 @@ async function shufflePlanner() {
       .filter(Boolean);
   }
 
-  /** Collect restriction “atoms” from many shapes; split strings into tokens; include *_ids too. */
+  /** Collect restriction "atoms" from many shapes; split strings into tokens; include *_ids too. */
   function getRestrictionRawList(s?: Soldier | null): any[] {
     if (!s) return [];
     const out: any[] = [];
@@ -847,7 +843,7 @@ async function shufflePlanner() {
     push((s as any).mission_restrictions);
     push((s as any).mission_restriction_ids);   // may be an array of numbers
 
-    // nested object we’ve seen in a few shapes
+    // nested object we've seen in a few shapes
     push((s as any).restrictions?.missions);
 
     return out;
@@ -892,7 +888,7 @@ async function shufflePlanner() {
       .filter((n): n is number => n != null);
   }
 
-  /** True if the row’s mission is restricted for its soldier (by name or id, id has fallback via allMissions). */
+  /** True if the row's mission is restricted for its soldier (by name or id, id has fallback via allMissions). */
   function isRowRestricted(row: FlatRosterItem): boolean {
     if (!row?.soldier_id) return false;
     const s = soldiersById.get(row.soldier_id);
@@ -1084,6 +1080,63 @@ async function shufflePlanner() {
   }
 
   async function handleReassign(soldierId: number) {
+    // Handle empty slots (no pendingAssignmentId)
+    if (!pendingAssignmentId && pendingEmptySlot) {
+      setChangeLoading(true);
+      setChangeError(null);
+      try {
+        // Parse the start/end times from the labels
+        const startHHMM = pendingEmptySlot.startHHMM;
+        const endHHMM = pendingEmptySlot.endHHMM;
+        
+        // Extract the day from the slot's start time (YYYY-MM-DD)
+        const slotDay = pendingEmptySlot.startLocalIso.slice(0, 10);
+        
+        const mission = allMissions.find(m => m.id === pendingEmptySlot.missionId);
+        if (!mission) {
+          setChangeError("Mission not found");
+          return;
+        }
+
+        console.log(`[DEBUG] Creating assignment:`, {
+          day: slotDay,
+          mission_id: pendingEmptySlot.missionId,
+          role_id: pendingEmptySlot.roleId,
+          start_time: startHHMM,
+          end_time: endHHMM,
+          soldier_id: soldierId,
+        });
+
+        const newAssignment = await createAssignment({
+          day: slotDay,
+          mission_id: pendingEmptySlot.missionId,
+          role_id: pendingEmptySlot.roleId,
+          start_time: startHHMM,
+          end_time: endHHMM,
+          soldier_id: soldierId,
+        });
+
+        console.log(`[DEBUG] Created assignment:`, newAssignment);
+
+        // Refresh the entire list (use slotDay since we created the assignment for that day)
+        await withPreservedScroll(async () => {
+          await loadAllAssignments(slotDay);
+          await loadWarnings(slotDay);
+          await loadDayRosterForWarnings(slotDay);
+        });
+
+        setIsChangeOpen(false);
+        setPendingAssignmentId(null);
+        setPendingEmptySlot(null);
+      } catch (e: any) {
+        setChangeError(e?.response?.data?.detail ?? "Failed to assign");
+      } finally {
+        setChangeLoading(false);
+      }
+      return;
+    }
+
+    // Handle existing assignments (has pendingAssignmentId)
     if (!pendingAssignmentId) return;
     setChangeLoading(true);
     setChangeError(null);
@@ -1206,7 +1259,7 @@ async function shufflePlanner() {
           // Soldiers who leave today or return today are considered AVAILABLE.
           if (leavingToday || returningToday) {
             // Attach markers so we can show a note in the Available list.
-            // We’ll keep a parallel map so we don’t mutate Soldier type.
+            // We'll keep a parallel map so we don't mutate Soldier type.
             (available as any)._markers = (available as any)._markers || new Map<number, { leavingToday: boolean; returningToday: boolean }>();
             (available as any)._markers.set(s.id, { leavingToday, returningToday });
             available.push(s);
@@ -1217,7 +1270,7 @@ async function shufflePlanner() {
       }
 
       // 5) Save to state
-      // (we also keep assignedToday as a Set, but we’ll recompute inside render from rowsForWarnings)
+      // (we also keep assignedToday as a Set, but we'll recompute inside render from rowsForWarnings)
       setAvailSoldiers(available);
       setVacationSoldiers(onVacation);
     } catch (e: any) {
@@ -1698,7 +1751,8 @@ function formatWarningDetails(w: PlannerWarning): string {
             missions.map(async (m) => {
               try {
                 const r = await getMissionRequirements(m.id);
-                return [m.id, { total_needed: r.total_needed ?? null, requirements: r.requirements ?? [] }];
+                // Use total_needed from the Mission object (m.total_needed) as the primary source
+                return [m.id, { total_needed: m.total_needed ?? null, requirements: r.requirements ?? [] }];
               } catch {
                 return [m.id, { total_needed: m.total_needed ?? null, requirements: [] }];
               }
@@ -2143,20 +2197,6 @@ function formatWarningDetails(w: PlannerWarning): string {
                           </tr>
                         ) : null;
 
-                      const missionCell = (
-                        <td className="align-top p-2 border bg-gray-50" rowSpan={rowsForSlot.length || 1}>
-                          <div className="font-semibold">{g.missionName || "—"}</div>
-                        </td>
-                      );
-
-                      const timeCell = (
-                        <td className="align-top p-2 border bg-gray-50" rowSpan={rowsForSlot.length || 1}>
-                          <div className="text-xs text-gray-600">
-                            {slot.startLabel} → {slot.endLabel}
-                          </div>
-                        </td>
-                      );
-
                       // EMPTY SLOT
                       if (rowsForSlot.length === 0) {
                         const reqMeta = g.missionId != null ? requirementsByMission.get(g.missionId) : undefined;
@@ -2165,41 +2205,67 @@ function formatWarningDetails(w: PlannerWarning): string {
                         const totalNeeded = reqMeta?.total_needed ?? 0;
                         const genericSlots = Math.max(0, Number(totalNeeded) - Number(explicitCount));
 
+                        // Build array of required roles (repeat each role based on its count)
+                        const requiredSlots: Array<{ roleName: string | null; roleId: number | null; index: number }> = [];
+                        
+                        for (const r of reqs) {
+                          const roleName = reqRoleName(r);
+                          const roleId = reqRoleId(r);
+                          const count = reqCount(r);
+                          for (let i = 0; i < count; i++) {
+                            requiredSlots.push({ roleName, roleId, index: i });
+                          }
+                        }
+                        
+                        // Add generic slots if needed
+                        for (let i = 0; i < genericSlots; i++) {
+                          requiredSlots.push({ roleName: null, roleId: null, index: i });
+                        }
+                        
+                        // If no specific requirements, show one generic slot
+                        if (requiredSlots.length === 0) {
+                          requiredSlots.push({ roleName: guessRoleFromMissionName(g.missionName), roleId: null, index: 0 });
+                        }
+
+                        // Calculate row count for empty slots based on requiredSlots
+                        const rowCount = requiredSlots.length || 1;
+
+                        // missionCell and timeCell for empty slots
+                        const missionCell = (
+                          <td className="align-top p-2 border bg-gray-50" rowSpan={rowCount}>
+                            <div className="font-semibold">{g.missionName || "—"}</div>
+                          </td>
+                        );
+
+                        const timeCell = (
+                          <td className="align-top p-2 border bg-gray-50" rowSpan={rowCount}>
+                            <div className="text-xs text-gray-600">
+                              {slot.startLabel} → {slot.endLabel}
+                            </div>
+                          </td>
+                        );
+
                         return (
                           <React.Fragment key={slot.key}>
                             {slotDivider}
-                            <tr>
-                              {missionCell}
-                              {timeCell}
+                            {requiredSlots.map((reqSlot, reqIdx) => {
+                              const isFirstRow = reqIdx === 0;
+                              
+                              return (
+                                <tr key={`${slot.key}-req-${reqIdx}`}>
+                                  {isFirstRow && missionCell}
+                                  {isFirstRow && timeCell}
+                                  
+                                  {/* Role column */}
+                                  <td className="p-2 border">{reqSlot.roleName ?? ""}</td>
+                                  
+                                  {/* Soldier column */}
+                                  <td className="p-2 border">
+                                    <div className="flex items-center gap-2">
+                                      <span className="italic text-gray-500" style={{ color: "crimson" }}>
+                                        לא משובץ
+                                      </span>
 
-                              {/* Role column (derived) */}
-                              {(() => {
-                                const activeReqs = (reqs || []).filter((r) => reqCount(r) > 0);
-                                let displayRoleName: string | null = null;
-
-                                if (activeReqs.length === 1) {
-                                  displayRoleName = reqRoleName(activeReqs[0]);
-                                } else if (activeReqs.length === 0) {
-                                  displayRoleName = guessRoleFromMissionName(g.missionName);
-                                  if (!displayRoleName && genericSlots > 0) displayRoleName = "Any";
-                                }
-                                return <td className="p-2 border">{displayRoleName ?? "—"}</td>;
-                              })()}
-
-                              {/* Soldier column */}
-                              <td className="p-2 border">
-                                <div className="flex items-center gap-2">
-                                  <span className="italic text-gray-500" style={{ color: "crimson" }}>
-                                    לא משובץ
-                                  </span>
-
-                                  {(() => {
-                                    const activeReqs = (reqs || []).filter((r) => reqCount(r) > 0);
-                                    const singleRoleReq = activeReqs.length === 1 ? activeReqs[0] : null;
-                                    const singleRoleName = singleRoleReq ? reqRoleName(singleRoleReq) : null;
-                                    const singleRoleId = singleRoleReq ? reqRoleId(singleRoleReq) : null;
-
-                                    return (
                                       <button
                                         type="button"
                                         className="border rounded px-2 py-1"
@@ -2210,85 +2276,164 @@ function formatWarningDetails(w: PlannerWarning): string {
                                             g.missionId,
                                             slot.startLabel,
                                             slot.endLabel,
-                                            singleRoleName,
-                                            singleRoleId
+                                            reqSlot.roleName,
+                                            reqSlot.roleId
                                           )
                                         }
                                       >
                                         החלף
                                       </button>
-                                    );
-                                  })()}
-                                </div>
+                                    </div>
+                                  </td>
 
-                                {(reqs.length > 0 || genericSlots > 0) && (
-                                  <div className="mt-2 flex flex-wrap gap-6 items-center">
-                                    {reqs.map((r, idx) => {
-                                      const roleName = reqRoleName(r) ?? `Role #${reqRoleId(r) ?? "?"}`;
-                                      const count = reqCount(r);
-                                      if (count <= 0) return null;
-                                      return (
-                                        <div key={idx} className="flex items-center gap-2">
-                                          <span className="text-sm text-gray-600">
-                                            {roleName} × {count}
-                                          </span>
-                                          <button
-                                            type="button"
-                                            className="border rounded px-2 py-1"
-                                            onClick={() =>
-                                              g.missionId &&
-                                              openChangeModalForEmptySlot(
-                                                g.missionId,
-                                                slot.startLabel,
-                                                slot.endLabel,
-                                                reqRoleName(r),
-                                                reqRoleId(r)
-                                              )
-                                            }
-                                          >
-                                            שבץ {roleName}
-                                          </button>
-                                        </div>
-                                      );
-                                    })}
-
-                                    {genericSlots > 0 && (
-                                      <div className="flex items-center gap-2">
-                                        <span className="text-sm text-gray-600">Generic × {genericSlots}</span>
-                                        <button
-                                          type="button"
-                                          className="border rounded px-2 py-1"
-                                          onClick={() =>
-                                            g.missionId &&
-                                            openChangeModalForEmptySlot(
-                                              g.missionId,
-                                              slot.startLabel,
-                                              slot.endLabel,
-                                              null,
-                                              null
-                                            )
-                                          }
-                                        >
-                                          Assign (Any)
-                                        </button>
-                                      </div>
-                                    )}
-                                  </div>
-                                )}
-                              </td>
-
-                              {/* Warnings column for empty slot */}
-                              <td className="p-2 border">{/* empty */}</td>
-                            </tr>
+                                  {/* Warnings column for empty slot */}
+                                  <td className="p-2 border">{/* empty */}</td>
+                                </tr>
+                              );
+                            })}
                           </React.Fragment>
                         );
                       }
 
-                      // NON-EMPTY SLOT
+                      // NON-EMPTY SLOT: Show assigned rows AND remaining empty slots
+                      const reqMeta = g.missionId != null ? requirementsByMission.get(g.missionId) : undefined;
+                      const reqs = reqMeta?.requirements ?? [];
+                      const explicitCount = reqs.reduce((sum, r) => sum + reqCount(r), 0);
+                      const totalNeeded = reqMeta?.total_needed ?? 0;
+                      const genericSlots = Math.max(0, Number(totalNeeded) - Number(explicitCount));
+
+                      // Build array of required roles (same as empty slot logic)
+                      const requiredSlots: Array<{ roleName: string | null; roleId: number | null; index: number }> = [];
+                      
+                      for (const r of reqs) {
+                        const roleName = reqRoleName(r);
+                        const roleId = reqRoleId(r);
+                        const count = reqCount(r);
+                        for (let i = 0; i < count; i++) {
+                          requiredSlots.push({ roleName, roleId, index: i });
+                        }
+                      }
+                      
+                      // Add generic slots if needed
+                      for (let i = 0; i < genericSlots; i++) {
+                        requiredSlots.push({ roleName: null, roleId: null, index: i });
+                      }
+                      
+                      // If no specific requirements, show one generic slot
+                      if (requiredSlots.length === 0) {
+                        requiredSlots.push({ roleName: guessRoleFromMissionName(g.missionName), roleId: null, index: 0 });
+                      }
+
+                      // Map existing assignments to their roles for efficient lookup
+                      const assignmentByRoleId = new Map<number | null, FlatRosterItem>();
+                      const assignmentByRoleName = new Map<string | null, FlatRosterItem>();
+                      for (const r of rowsForSlot) {
+                        // Try to get role_id from the assignment (it might be in the API response even if not in the type)
+                        const roleId = (r as any).role_id;
+                        if (roleId != null) {
+                          assignmentByRoleId.set(roleId, r);
+                        }
+                        if (r.role) {
+                          assignmentByRoleName.set(r.role, r);
+                        }
+                      }
+
+                      // Build complete list: required slots, marked as assigned or unassigned
+                      // Track which assignments we've already used to avoid duplicates
+                      const usedAssignmentIds = new Set<number>();
+                      
+                      const completeRows: Array<{ 
+                        requiredSlot: { roleName: string | null; roleId: number | null; index: number };
+                        assignment: FlatRosterItem | null;
+                      }> = requiredSlots.map(reqSlot => {
+                        // Try to find matching assignment by roleId or roleName
+                        let assignment: FlatRosterItem | null = null;
+                        if (reqSlot.roleId != null) {
+                          const candidate = assignmentByRoleId.get(reqSlot.roleId);
+                          if (candidate && !usedAssignmentIds.has(candidate.id)) {
+                            assignment = candidate;
+                            usedAssignmentIds.add(candidate.id);
+                          }
+                        }
+                        if (!assignment && reqSlot.roleName != null) {
+                          const candidate = assignmentByRoleName.get(reqSlot.roleName);
+                          if (candidate && !usedAssignmentIds.has(candidate.id)) {
+                            assignment = candidate;
+                            usedAssignmentIds.add(candidate.id);
+                          }
+                        }
+                        // For generic slots (roleId and roleName both null), try to find any available assignment
+                        if (!assignment && reqSlot.roleId === null && reqSlot.roleName === null) {
+                          // Find the first unused assignment in this slot
+                          const candidate = rowsForSlot.find(r => !usedAssignmentIds.has(r.id));
+                          if (candidate) {
+                            assignment = candidate;
+                            usedAssignmentIds.add(candidate.id);
+                          }
+                        }
+                        return { requiredSlot: reqSlot, assignment };
+                      });
+
+                      const totalRowCount = completeRows.length || 1;
+
+                      // missionCell and timeCell for non-empty slots
+                      const nonEmptyMissionCell = (
+                        <td className="align-top p-2 border bg-gray-50" rowSpan={totalRowCount}>
+                          <div className="font-semibold">{g.missionName || "—"}</div>
+                        </td>
+                      );
+
+                      const nonEmptyTimeCell = (
+                        <td className="align-top p-2 border bg-gray-50" rowSpan={totalRowCount}>
+                          <div className="text-xs text-gray-600">
+                            {slot.startLabel} → {slot.endLabel}
+                          </div>
+                        </td>
+                      );
+
                       return (
                         <React.Fragment key={slot.key}>
                           {slotDivider}
-                          {rowsForSlot.map((r, idx) => {
+                          {completeRows.map((rowData, idx) => {
+                            const { requiredSlot, assignment } = rowData;
+                            if (!assignment) {
+                              // This required slot is unassigned
+                              return (
+                                <tr key={`${slot.key}-unassigned-${idx}`}>
+                                  {idx === 0 && nonEmptyMissionCell}
+                                  {idx === 0 && nonEmptyTimeCell}
+                                  <td className="p-2 border">{requiredSlot.roleName ?? ""}</td>
+                                  <td className="p-2 border">
+                                    <div className="flex items-center gap-2">
+                                      <span className="italic text-gray-500" style={{ color: "crimson" }}>
+                                        לא משובץ
+                                      </span>
+                                      <button
+                                        type="button"
+                                        className="border rounded px-2 py-1"
+                                        disabled={locked}
+                                        onClick={() =>
+                                          g.missionId &&
+                                          openChangeModalForEmptySlot(
+                                            g.missionId,
+                                            slot.startLabel,
+                                            slot.endLabel,
+                                            requiredSlot.roleName,
+                                            requiredSlot.roleId
+                                          )
+                                        }
+                                      >
+                                        החלף
+                                      </button>
+                                    </div>
+                                  </td>
+                                  <td className="p-2 border">{/* empty */}</td>
+                                </tr>
+                              );
+                            }
+                            
+                            // This is an assigned slot
+                            const r = assignment;
                             // ⛳ ANCHOR: merge RESTRICTED pill into Assignments->Warnings
                             const apiWarnings = warningsByAssignmentId.get(r.id) || [];
 
@@ -2316,8 +2461,8 @@ function formatWarningDetails(w: PlannerWarning): string {
 
                             return (
                               <tr key={`${slot.key}__${r.id}`}>
-                                {idx === 0 && missionCell}
-                                {idx === 0 && timeCell}
+                                {idx === 0 && nonEmptyMissionCell}
+                                {idx === 0 && nonEmptyTimeCell}
                                 <td className="p-2 border">{r.role ?? ""}</td>
                                 <td className="border">
                                   <div className="flex items-center gap-2">

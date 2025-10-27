@@ -117,9 +117,9 @@ export default function SoldierHistoryModal({ soldierId, soldierName, isOpen, on
           <table className="min-w-full border-collapse">
             <thead>
               <tr>
-                <th className="border p-2 text-left">משימה</th>
-                <th className="border p-2 text-left">חלון זמן</th>
-                <th className="border p-2 text-left">חברים למשימה</th>
+                <th className="border p-2">משימה</th>
+                <th className="border p-2">חלון זמן</th>
+                <th className="border p-2">חברים למשימה</th>
               </tr>
             </thead>
             <tbody>

@@ -29,7 +29,9 @@ export type MissionSlot = {
 };
 
 export type MissionRequirement = {
+  id: number;
   role_id: number;
+  role_name: string;
   count: number;
 };
 
@@ -39,8 +41,9 @@ export type MissionRequirementsBatch = {
 };
 
 export async function getMissionRequirements(missionId: number): Promise<MissionRequirementsBatch> {
-  const { data } = await api.get(`/missions/${missionId}/requirements`);
-  return data as MissionRequirementsBatch;
+  // Fetch requirements list
+  const { data } = await api.get<MissionRequirement[]>(`/missions/${missionId}/requirements`);
+  return { total_needed: null, requirements: data };
 }
 
 export async function putMissionRequirements(
