@@ -37,6 +37,7 @@ class RosterItem(BaseModel):
     id: int
     mission: dict
     role: Optional[str] = None
+    role_id: Optional[int] = None  # NEW: role ID for exclusion feature
     soldier_id: Optional[int] = None
     soldier_name: str
     start_at: str
@@ -111,6 +112,7 @@ def roster(
                 id=a.id,
                 mission={"id": a.mission.id, "name": a.mission.name} if a.mission else {"id": None, "name": None},
                 role=a.role.name if a.role else None,
+                role_id=a.role_id,  # NEW: include role ID
                 soldier_id=a.soldier.id if a.soldier else None,
                 soldier_name=a.soldier.name if a.soldier else "",
                 start_at=_naive(a.start_at).isoformat(timespec="seconds"),

@@ -26,6 +26,7 @@ type FlatRosterItem = {
   id: number;
   mission: { id: number | null; name: string | null } | null;
   role: string | null;
+  role_id: number | null;  // NEW: for exclusion feature
   soldier_id: number | null;
   soldier_name: string;
   start_at: string; // ISO
@@ -61,7 +62,7 @@ function humanError(e: any, fallback: string) {
 async function fillPlanForDay(
   forDay: string,
   replace = false,
-  opts?: { shuffle?: boolean; random_seed?: number }
+  opts?: { shuffle?: boolean; random_seed?: number; exclude_slots?: string[] }
 ) {
   await api.post("/plan/fill", { day: forDay, replace, ...(opts || {}) });
 }
@@ -227,6 +228,18 @@ export default function Planner() {
   const [rowsForWarnings, setRowsForWarnings] = useState<FlatRosterItem[]>([]);
 
   const [soldiersById, setSoldiersById] = useState<Map<number, Soldier>>(new Map());
+  
+  // Track which slots should remain unassigned during fill/shuffle
+  // Key: `${mission_id}_${role || 'GENERIC'}_${start_at}_${end_at}`
+  const [excludedSlots, setExcludedSlots] = useState<Set<string>>(() => {
+    try {
+      const key = `planner.excludedSlots.${day}`;
+      const raw = localStorage.getItem(key);
+      return raw ? new Set(JSON.parse(raw)) : new Set();
+    } catch {
+      return new Set();
+    }
+  });
 
   const warningsByAssignmentId = useMemo(() => {
   const map = new Map<number, PlannerWarning[]>();
@@ -333,6 +346,14 @@ export default function Planner() {
 
 
   useEffect(() => {
+    // Load excluded slots for the current day
+    try {
+      const key = `planner.excludedSlots.${day}`;
+      const raw = localStorage.getItem(key);
+      setExcludedSlots(raw ? new Set(JSON.parse(raw)) : new Set());
+    } catch {
+      setExcludedSlots(new Set());
+    }
     // load warnings whenever the selected day changes
     loadWarnings(day);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -356,7 +377,9 @@ async function runPlanner() {
   setBusy(true);
   try {
     // 1) Ask the backend to fill the plan for the selected day
-    await fillPlanForDay(day, /* replace */ false);
+    // Include only currently excluded slots (those with checkboxes checked)
+    const excludeSlots = Array.from(excludedSlots);
+    await fillPlanForDay(day, /* replace */ false, { exclude_slots: excludeSlots });
 
     // 2) Refresh the UI
     await loadAllAssignments();
@@ -373,9 +396,11 @@ async function shufflePlanner() {
   setBusy(true);
   try {
     // Replace the current plan and ask backend to shuffle pools and RR cursors
+    const excludeSlots = Array.from(excludedSlots);
     await fillPlanForDay(day, /* replace */ true, {
       shuffle: true,
       random_seed: Date.now(),
+      exclude_slots: excludeSlots,
     });
 
     // Refresh UI & warning datasets
@@ -1775,6 +1800,16 @@ function formatWarningDetails(w: PlannerWarning): string {
     }
   }, [lockedByDay]);
 
+  useEffect(() => {
+    try {
+      const key = `planner.excludedSlots.${day}`;
+      // Convert Set to Array for JSON serialization
+      localStorage.setItem(key, JSON.stringify(Array.from(excludedSlots)));
+    } catch {
+      // ignore persistence errors
+    }
+  }, [excludedSlots, day]);
+
   return (
     <div className="p-4 space-y-4">
       <h1 className="text-xl font-semibold">שיבוץ</h1>
@@ -2151,6 +2186,7 @@ function formatWarningDetails(w: PlannerWarning): string {
             <table className="min-w-[760px] w-full text-sm">
               <thead className="bg-gray-50">
                 <tr>
+                  <th className="text-left p-2 border w-[40px]">רשום</th>
                   <th className="text-left p-2 border w-[220px]">משימה</th>
                   <th className="text-left p-2 border w-[260px]">חלון זמן</th>
                   <th className="text-left p-2 border">תפקיד</th>
@@ -2164,7 +2200,7 @@ function formatWarningDetails(w: PlannerWarning): string {
                     {/* Mission divider (skip before the first mission) */}
                     {gIdx > 0 && (
                       <tr aria-hidden>
-                        <td colSpan={5} style={{ padding: 0 }}>
+                        <td colSpan={6} style={{ padding: 0 }}>
                           <div
                             style={{
                               height: 1,
@@ -2184,7 +2220,7 @@ function formatWarningDetails(w: PlannerWarning): string {
                       const slotDivider =
                         sIdx > 0 ? (
                           <tr key={`ssep-${gIdx}-${sIdx}`} aria-hidden>
-                            <td colSpan={5} style={{ padding: 0 }}>
+                            <td colSpan={6} style={{ padding: 0 }}>
                               <div
                                 style={{
                                   height: 1,
@@ -2251,10 +2287,43 @@ function formatWarningDetails(w: PlannerWarning): string {
                             {requiredSlots.map((reqSlot, reqIdx) => {
                               const isFirstRow = reqIdx === 0;
                               
+                              // Generate slot key for exclusion tracking
+                              const missionSlots = slotsByMission.get(g.missionId || 0) || [];
+                              let slotKey = `${g.missionId}_${reqSlot.roleId || 'GENERIC'}_${slot.startLabel}_${slot.endLabel}_${reqIdx}`;
+                              if (missionSlots.length > sIdx) {
+                                const missionSlot = missionSlots[sIdx];
+                                const slotDay = day;
+                                const startISO = `${slotDay}T${missionSlot.start_time}:00`;
+                                const isOvernight = parseInt(missionSlot.start_time.split(':')[0]) >= parseInt(missionSlot.end_time.split(':')[0]);
+                                const endDayISO = isOvernight ? shiftDay(day, 1) : day;
+                                const endISO = `${endDayISO}T${missionSlot.end_time}:00`;
+                                slotKey = `${g.missionId}_${reqSlot.roleId || 'GENERIC'}_${startISO}_${endISO}_${reqIdx}`;
+                              }
+                              const isExcluded = excludedSlots.has(slotKey);
+                              
                               return (
                                 <tr key={`${slot.key}-req-${reqIdx}`}>
                                   {isFirstRow && missionCell}
                                   {isFirstRow && timeCell}
+                                  
+                                  {/* Checkbox column */}
+                                  <td className="p-2 border">
+                                    <input
+                                      type="checkbox"
+                                      checked={isExcluded}
+                                      onChange={(e) => {
+                                        setExcludedSlots(prev => {
+                                          const next = new Set(prev);
+                                          if (e.target.checked) {
+                                            next.add(slotKey);
+                                          } else {
+                                            next.delete(slotKey);
+                                          }
+                                          return next;
+                                        });
+                                      }}
+                                    />
+                                  </td>
                                   
                                   {/* Role column */}
                                   <td className="p-2 border">{reqSlot.roleName ?? ""}</td>
@@ -2394,14 +2463,53 @@ function formatWarningDetails(w: PlannerWarning): string {
                       return (
                         <React.Fragment key={slot.key}>
                           {slotDivider}
-                          {completeRows.map((rowData, idx) => {
+                          {completeRows.map((rowData, rowIdx) => {
                             const { requiredSlot, assignment } = rowData;
+                            
+                            // Create a unique key for this slot using mission slot times AND row index
+                            // The rowIdx ensures each slot within the same time window is unique
+                            // Use mission slot times (not assignment times) to keep keys stable across reloads
+                            const slotKey = (() => {
+                              // Get the actual ISO times from mission slots (same for assigned and empty slots)
+                              const missionSlots = slotsByMission.get(g.missionId || 0) || [];
+                              if (missionSlots.length > sIdx) {
+                                const missionSlot = missionSlots[sIdx];
+                                const slotDay = day;
+                                const startISO = `${slotDay}T${missionSlot.start_time}:00`;
+                                const isOvernight = parseInt(missionSlot.start_time.split(':')[0]) >= parseInt(missionSlot.end_time.split(':')[0]);
+                                const endDayISO = isOvernight ? shiftDay(day, 1) : day;
+                                const endISO = `${endDayISO}T${missionSlot.end_time}:00`;
+                                // Use rowIdx to make each role slot unique within the same time window
+                                return `${g.missionId}_${requiredSlot.roleId || 'GENERIC'}_${startISO}_${endISO}_${rowIdx}`;
+                              }
+                              // Fallback if no slot data
+                              return `${g.missionId}_${requiredSlot.roleId || 'GENERIC'}_${slot.startLabel}_${slot.endLabel}_${rowIdx}`;
+                            })();
+                            const isExcluded = excludedSlots.has(slotKey);
+                            
                             if (!assignment) {
                               // This required slot is unassigned
                               return (
-                                <tr key={`${slot.key}-unassigned-${idx}`}>
-                                  {idx === 0 && nonEmptyMissionCell}
-                                  {idx === 0 && nonEmptyTimeCell}
+                                <tr key={`${slot.key}-unassigned-${rowIdx}`}>
+                                  {rowIdx === 0 && nonEmptyMissionCell}
+                                  {rowIdx === 0 && nonEmptyTimeCell}
+                                  <td className="p-2 border">
+                                    <input
+                                      type="checkbox"
+                                      checked={isExcluded}
+                                      onChange={(e) => {
+                                        setExcludedSlots(prev => {
+                                          const next = new Set(prev);
+                                          if (e.target.checked) {
+                                            next.add(slotKey);
+                                          } else {
+                                            next.delete(slotKey);
+                                          }
+                                          return next;
+                                        });
+                                      }}
+                                    />
+                                  </td>
                                   <td className="p-2 border">{requiredSlot.roleName ?? ""}</td>
                                   <td className="p-2 border">
                                     <div className="flex items-center gap-2">
@@ -2461,8 +2569,25 @@ function formatWarningDetails(w: PlannerWarning): string {
 
                             return (
                               <tr key={`${slot.key}__${r.id}`}>
-                                {idx === 0 && nonEmptyMissionCell}
-                                {idx === 0 && nonEmptyTimeCell}
+                                {rowIdx === 0 && nonEmptyMissionCell}
+                                {rowIdx === 0 && nonEmptyTimeCell}
+                                <td className="p-2 border">
+                                  <input
+                                    type="checkbox"
+                                    checked={isExcluded}
+                                    onChange={(e) => {
+                                      setExcludedSlots(prev => {
+                                        const next = new Set(prev);
+                                        if (e.target.checked) {
+                                          next.add(slotKey);
+                                        } else {
+                                          next.delete(slotKey);
+                                        }
+                                        return next;
+                                      });
+                                    }}
+                                  />
+                                </td>
                                 <td className="p-2 border">{r.role ?? ""}</td>
                                 <td className="border">
                                   <div className="flex items-center gap-2">

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, date, timedelta
 from typing import Dict, List, Optional
+import math
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -28,6 +29,7 @@ class FillRequest(BaseModel):
     replace: bool = False  # if true, clear existing assignments for these missions/day before filling
     shuffle: bool = False  # NEW: randomize pools / RR cursors to generate a different (still valid) plan
     random_seed: Optional[int] = None  # NEW: deterministic shuffle if provided
+    exclude_slots: Optional[List[str]] = None  # NEW: slot keys to exclude from assignment
 
 class PlanResultItem(BaseModel):
     mission: dict
@@ -389,7 +391,7 @@ def _load_context(db: Session) -> dict:
     missions: List[Mission] = db.execute(
         select(Mission).options(
             selectinload(Mission.slots),
-            selectinload(Mission.requirements),
+            selectinload(Mission.requirements).selectinload(MissionRequirement.role),
         )
     ).scalars().all()
 
@@ -421,7 +423,9 @@ def _collect_candidates_for_slot(
     rr_start_idx: int,
     strict: bool,
     assigned_here: set[int],                                  
-    pair_counts: Dict[int, Dict[int, int]],                   
+    pair_counts: Dict[int, Dict[int, int]],
+    shuffle_mode: bool = False,
+    rng: Optional[random.Random] = None,                   
 ) -> List[tuple[float, int, Soldier]]:
     """Return scored candidates. If strict=False, relax the 8h rest checks."""
     scored: List[tuple[float, int, Soldier]] = []
@@ -476,16 +480,32 @@ def _collect_candidates_for_slot(
 
 @router.post("/fill", response_model=FillResponse)
 def fill(req: FillRequest, db: Session = Depends(get_db)):
+    from datetime import timezone
+    
     the_day = _parse_day(req.day)
     day_start, day_end = _day_bounds(the_day)
+    
+    # Convert day bounds to UTC-aware datetimes for database comparisons
+    # The database stores timezone-aware datetimes, so we need to match that for WHERE clauses
+    day_start_aware = day_start.replace(tzinfo=timezone.utc)
+    day_end_aware = day_end.replace(tzinfo=timezone.utc)
+    
     ctx = _load_context(db)
     vacation_blocks = _vacation_blocks_for_day(db, the_day)
-    recent_assignments = _fetch_recent_assignments(db, day_start, day_end)
+    recent_assignments = _fetch_recent_assignments(db, day_start_aware, day_end_aware)
     stats_by_soldier = _build_soldier_stats(recent_assignments, day_start, day_end)
     pair_counts = _build_pair_counts(recent_assignments)
 
     # Optional shuffle: produce a different yet valid plan
-    rng = random.Random(req.random_seed) if req.random_seed is not None else random.Random()
+    if req.random_seed is not None:
+        rng = random.Random(req.random_seed)
+    else:
+        # Use system time and OS random bytes for a unique seed each time
+        import time
+        import os
+        seed = int.from_bytes(os.urandom(8), 'big') ^ time.time_ns()
+        rng = random.Random(seed)
+    
     if req.shuffle:
         # Shuffle per-role pools and generic pool in-place (copy-safe as they are lists we own)
         for role_id, lst in ctx["soldiers_by_role"].items():
@@ -497,8 +517,8 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
         (sid, _naive(s_at), _naive(e_at))
         for sid, s_at, e_at in db.execute(
             select(Assignment.soldier_id, Assignment.start_at, Assignment.end_at)
-            .where(Assignment.start_at < day_end)
-            .where(Assignment.end_at > day_start)
+            .where(Assignment.start_at < day_end_aware)
+            .where(Assignment.end_at > day_start_aware)
         ).all()
     )
 
@@ -506,8 +526,8 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
     occupied_by_soldier: Dict[int, List[tuple[datetime, datetime]]] = {}
     for sid, s_at, e_at in db.execute(
         select(Assignment.soldier_id, Assignment.start_at, Assignment.end_at)
-        .where(Assignment.start_at < day_end)
-        .where(Assignment.end_at > day_start)
+        .where(Assignment.start_at < day_end_aware)
+        .where(Assignment.end_at > day_start_aware)
     ).all():
         s_na, e_na = _naive(s_at), _naive(e_at)
         occupied_by_soldier.setdefault(sid, []).append((s_na, e_na))
@@ -537,31 +557,31 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
     if req.replace:
         ids_to_clear = [mm.id for mm in mission_list]
         if ids_to_clear:
-            db.execute(
-                delete(Assignment).where(
-                    and_(
-                        Assignment.mission_id.in_(ids_to_clear),
-                        Assignment.start_at >= day_start,
-                        Assignment.start_at < day_end,
-                    )
+            # Use timezone-aware datetimes for WHERE clause comparison with database
+            stmt = delete(Assignment).where(
+                and_(
+                    Assignment.mission_id.in_(ids_to_clear),
+                    Assignment.start_at >= day_start_aware,
+                    Assignment.start_at < day_end_aware,
                 )
             )
+            db.execute(stmt)
 
             # Rebuild lookups from DB after delete
             existing_same_window = set(
                 (sid, _naive(s_at), _naive(e_at))
                 for sid, s_at, e_at in db.execute(
                     select(Assignment.soldier_id, Assignment.start_at, Assignment.end_at)
-                    .where(Assignment.start_at < day_end)
-                    .where(Assignment.end_at > day_start)
+                    .where(Assignment.start_at < day_end_aware)
+                    .where(Assignment.end_at > day_start_aware)
                 ).all()
             )
 
             occupied_by_soldier: Dict[int, List[tuple[datetime, datetime]]] = {}
             for sid, s_at, e_at in db.execute(
                 select(Assignment.soldier_id, Assignment.start_at, Assignment.end_at)
-                .where(Assignment.start_at < day_end)
-                .where(Assignment.end_at > day_start)
+                .where(Assignment.start_at < day_end_aware)
+                .where(Assignment.end_at > day_start_aware)
             ).all():
                 s_na, e_na = _naive(s_at), _naive(e_at)
                 occupied_by_soldier.setdefault(sid, []).append((s_na, e_na))
@@ -582,8 +602,9 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
                 continue
 
             # explicit role demands only (no generic here)
+            # Sort by role name to match API ordering (for consistent exclusion keys)
             explicit_roles: List[int] = []
-            for r in reqs:
+            for r in sorted(reqs, key=lambda x: (x.role.name if x.role else "", x.role_id if hasattr(x, 'role_id') else 0)):
                 if r.count and r.count > 0:
                     explicit_roles.extend([r.role_id] * r.count)
 
@@ -595,7 +616,23 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
                 # track who we've already placed in THIS slot/window
                 assigned_here: set[int] = set()
 
+                # Track the ABSOLUTE position within THIS slot's assignments (across all roles)
+                absolute_slot_position = 0
+                
                 for role_id in explicit_roles:
+                    # Check if this specific instance should be excluded
+                    # Format: mission_id_roleId_start_at_end_at_index (UI sends absolute position)
+                    # UI appends :00 to isoformat() result: 2025-10-28T22:00:00 → 2025-10-28T22:00:00:00
+                    start_str = f"{start_at.isoformat()}:00"
+                    end_str = f"{end_at.isoformat()}:00"
+                    slot_key_base = f"{m.id}_{role_id}_{start_str}_{end_str}"
+                    slot_key_to_check = f"{slot_key_base}_{absolute_slot_position}"
+                    
+                    if req.exclude_slots and slot_key_to_check in req.exclude_slots:
+                        # This specific instance is excluded - skip it
+                        absolute_slot_position += 1  # Increment even when skipped to keep position tracking
+                        continue
+                    
                     # decide the pool
                     pool = [
                         s for s in ctx["soldiers_by_role"].get(role_id, [])
@@ -608,6 +645,7 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
                     # Filter out overlap with vacations or existing assignments
                     # Overlaps handled by occupied_by_soldier; vacations blocked by _collect logic
                     if not pool:
+                        absolute_slot_position += 1  # Increment even when no pool
                         continue
 
                     # round-robin starting point for this role
@@ -628,13 +666,25 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
                         strict=True,
                         assigned_here=assigned_here,            # NEW
                         pair_counts=pair_counts,                # NEW
+                        shuffle_mode=req.shuffle,                # NEW
+                        rng=rng if req.shuffle else None,        # NEW
                     )
 
                     # If we have nobody, leave the seat empty
                     if not scored:
+                        absolute_slot_position += 1  # Increment even when no candidates found
                         continue
 
-                    chosen_score, chosen_i, soldier = scored[0]
+                    # In shuffle mode, pick randomly from top candidates for variety
+                    if req.shuffle and len(scored) > 0:
+                        # Pick from top candidates (top 30% or at least 10), favoring better scores
+                        top_n = min(max(10, len(scored) // 3), len(scored))
+                        # Random index weighted toward beginning (better scores)
+                        rand_val = rng.random() * rng.random()  # Square distribution favors lower values
+                        idx = int(rand_val * top_n)
+                        chosen_score, chosen_i, soldier = scored[idx]
+                    else:
+                        chosen_score, chosen_i, soldier = scored[0]
 
                     # advance RR cursor to next after chosen_i for this role
                     rr_index[role_id] = (chosen_i + 1) % max(1, len(pool))
@@ -651,6 +701,9 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
                     )
                     db.add(a)
                     created_here += 1
+                    
+                    # Increment the slot position counter
+                    absolute_slot_position += 1
 
                     existing_same_window.add((soldier.id, start_at, end_at))
                     occupied_by_soldier.setdefault(soldier.id, []).append((start_at, end_at))
@@ -697,7 +750,27 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
                 assigned_here: set[int] = set()
 
                 # generic seats for this mission window
-                for _ in range(generic_count):
+                # Track the position for generic slots (starts after explicit roles)
+                # Calculate explicit roles count for this mission (sorted by role name for consistency with UI)
+                explicit_roles_list: List[int] = []
+                for r in sorted(reqs, key=lambda x: (x.role.name if x.role else "", x.role_id if hasattr(x, 'role_id') else 0)):
+                    if r.count and r.count > 0:
+                        explicit_roles_list.extend([r.role_id] * r.count)
+                generic_position = len(explicit_roles_list)
+                
+                for i in range(generic_count):
+                    # Check if this specific generic slot instance should be excluded
+                    # Format: mission_id_GENERIC_start_at_end_at_index 
+                    # The index is the absolute position across all slots (explicit + generic)
+                    # UI appends :00 to isoformat() result
+                    slot_key_base = f"{m.id}_GENERIC_{start_at.isoformat()}:00_{end_at.isoformat()}:00"
+                    slot_key_to_check = f"{slot_key_base}_{generic_position}"
+                    
+                    if req.exclude_slots and slot_key_to_check in req.exclude_slots:
+                        # This specific instance is excluded - skip it
+                        generic_position += 1  # Increment even when skipped
+                        continue
+                    
                     # anyone valid for the mission (any role), excluding restricted pairs
                     pool = [
                         s for s in ctx["all_soldiers"]
@@ -708,6 +781,7 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
                     pool = [s for s in pool if (s.id, start_at, end_at) not in existing_same_window]
 
                     if not pool:
+                        generic_position += 1  # Increment even when no pool
                         continue
 
                     # round-robin starting point for "generic" (key None)
@@ -728,12 +802,24 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
                         strict=True,
                         assigned_here=assigned_here,            # NEW
                         pair_counts=pair_counts,                # NEW
+                        shuffle_mode=req.shuffle,                # NEW
+                        rng=rng if req.shuffle else None,        # NEW
                     )
 
                     if not scored:
+                        generic_position += 1  # Increment even when no candidates
                         continue
 
-                    chosen_score, chosen_i, soldier = scored[0]
+                    # In shuffle mode, pick randomly from top candidates for variety
+                    if req.shuffle and len(scored) > 0:
+                        # Pick from top candidates (top 30% or at least 10), favoring better scores
+                        top_n = min(max(10, len(scored) // 3), len(scored))
+                        # Random index weighted toward beginning (better scores)
+                        rand_val = rng.random() * rng.random()  # Square distribution favors lower values
+                        idx = int(rand_val * top_n)
+                        chosen_score, chosen_i, soldier = scored[idx]
+                    else:
+                        chosen_score, chosen_i, soldier = scored[0]
 
                     # advance RR cursor for generic seats (key None)
                     rr_index[None] = (chosen_i + 1) % max(1, len(pool))
@@ -749,6 +835,9 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
                     )
                     db.add(a)
                     created_here += 1
+                    
+                    # Increment the generic position counter
+                    generic_position += 1
 
                     existing_same_window.add((soldier.id, start_at, end_at))
                     occupied_by_soldier.setdefault(soldier.id, []).append((start_at, end_at))
@@ -768,6 +857,11 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
             )
 
     db.commit()
+    
+    # Debug: log how many assignments were created
+    total_created = sum(r.created_count or 0 for r in results)
+    print(f"[DEBUG] fill: day={req.day}, replace={req.replace}, shuffle={req.shuffle}, total_assignments_created={total_created}")
+    
     return FillResponse(day=req.day, results=results)
 
 @router.post("/unassign_assignment")
