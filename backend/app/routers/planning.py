@@ -776,13 +776,20 @@ def unassign_assignment(req: UnassignRequest, db: Session = Depends(get_db)):
     if not a:
         raise HTTPException(status_code=404, detail="Assignment not found")
 
-    a.soldier_id = None
-    db.add(a)
+    # Save the assignment ID and soldier info before deletion
+    assignment_id = a.id
+    soldier_id = a.soldier_id
+    soldier_name = None
+    if a.soldier:
+        soldier_name = a.soldier.name
+
+    # Delete the assignment entirely instead of setting soldier_id to null
+    # This avoids unique constraint violations when multiple unassigned slots exist
+    db.delete(a)
     db.commit()
-    db.refresh(a)
 
     return {
-        "id": a.id,
-        "soldier_id": None,
-        "soldier_name": None,
+        "id": assignment_id,
+        "soldier_id": soldier_id,
+        "soldier_name": soldier_name,
     }
