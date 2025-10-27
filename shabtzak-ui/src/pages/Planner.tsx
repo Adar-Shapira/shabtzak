@@ -62,7 +62,7 @@ function humanError(e: any, fallback: string) {
 async function fillPlanForDay(
   forDay: string,
   replace = false,
-  opts?: { shuffle?: boolean; random_seed?: number; exclude_slots?: string[] }
+  opts?: { shuffle?: boolean; random_seed?: number; exclude_slots?: string[]; locked_assignments?: number[] }
 ) {
   await api.post("/plan/fill", { day: forDay, replace, ...(opts || {}) });
 }
@@ -241,6 +241,18 @@ export default function Planner() {
     }
   });
 
+  // Track which assignments should be locked (not reassigned during fill/shuffle)
+  // Key: assignment ID
+  const [lockedAssignments, setLockedAssignments] = useState<Set<number>>(() => {
+    try {
+      const key = `planner.lockedAssignments.${day}`;
+      const raw = localStorage.getItem(key);
+      return raw ? new Set(JSON.parse(raw)) : new Set();
+    } catch {
+      return new Set();
+    }
+  });
+
   const warningsByAssignmentId = useMemo(() => {
   const map = new Map<number, PlannerWarning[]>();
   for (const w of warnings) {
@@ -346,13 +358,18 @@ export default function Planner() {
 
 
   useEffect(() => {
-    // Load excluded slots for the current day
+    // Load excluded slots and locked assignments for the current day
     try {
-      const key = `planner.excludedSlots.${day}`;
-      const raw = localStorage.getItem(key);
-      setExcludedSlots(raw ? new Set(JSON.parse(raw)) : new Set());
+      const excludedKey = `planner.excludedSlots.${day}`;
+      const excludedRaw = localStorage.getItem(excludedKey);
+      setExcludedSlots(excludedRaw ? new Set(JSON.parse(excludedRaw)) : new Set());
+      
+      const lockedKey = `planner.lockedAssignments.${day}`;
+      const lockedRaw = localStorage.getItem(lockedKey);
+      setLockedAssignments(lockedRaw ? new Set(JSON.parse(lockedRaw)) : new Set());
     } catch {
       setExcludedSlots(new Set());
+      setLockedAssignments(new Set());
     }
     // load warnings whenever the selected day changes
     loadWarnings(day);
@@ -379,7 +396,8 @@ async function runPlanner() {
     // 1) Ask the backend to fill the plan for the selected day
     // Include only currently excluded slots (those with checkboxes checked)
     const excludeSlots = Array.from(excludedSlots);
-    await fillPlanForDay(day, /* replace */ false, { exclude_slots: excludeSlots });
+    const lockedAssignmentIds = Array.from(lockedAssignments);
+    await fillPlanForDay(day, /* replace */ false, { exclude_slots: excludeSlots, locked_assignments: lockedAssignmentIds });
 
     // 2) Refresh the UI
     await loadAllAssignments();
@@ -397,10 +415,12 @@ async function shufflePlanner() {
   try {
     // Replace the current plan and ask backend to shuffle pools and RR cursors
     const excludeSlots = Array.from(excludedSlots);
+    const lockedAssignmentIds = Array.from(lockedAssignments);
     await fillPlanForDay(day, /* replace */ true, {
       shuffle: true,
       random_seed: Date.now(),
       exclude_slots: excludeSlots,
+      locked_assignments: lockedAssignmentIds,
     });
 
     // Refresh UI & warning datasets
@@ -1810,6 +1830,16 @@ function formatWarningDetails(w: PlannerWarning): string {
     }
   }, [excludedSlots, day]);
 
+  useEffect(() => {
+    try {
+      const key = `planner.lockedAssignments.${day}`;
+      // Convert Set to Array for JSON serialization
+      localStorage.setItem(key, JSON.stringify(Array.from(lockedAssignments)));
+    } catch {
+      // ignore persistence errors
+    }
+  }, [lockedAssignments, day]);
+
   return (
     <div className="p-4 space-y-4">
       <h1 className="text-xl font-semibold">שיבוץ</h1>
@@ -2187,6 +2217,7 @@ function formatWarningDetails(w: PlannerWarning): string {
               <thead className="bg-gray-50">
                 <tr>
                   <th className="text-left p-2 border w-[40px]">רשום</th>
+                  <th className="text-left p-2 border w-[40px]">נעל</th>
                   <th className="text-left p-2 border w-[220px]">משימה</th>
                   <th className="text-left p-2 border w-[260px]">חלון זמן</th>
                   <th className="text-left p-2 border">תפקיד</th>
@@ -2200,7 +2231,7 @@ function formatWarningDetails(w: PlannerWarning): string {
                     {/* Mission divider (skip before the first mission) */}
                     {gIdx > 0 && (
                       <tr aria-hidden>
-                        <td colSpan={6} style={{ padding: 0 }}>
+                        <td colSpan={7} style={{ padding: 0 }}>
                           <div
                             style={{
                               height: 1,
@@ -2220,7 +2251,7 @@ function formatWarningDetails(w: PlannerWarning): string {
                       const slotDivider =
                         sIdx > 0 ? (
                           <tr key={`ssep-${gIdx}-${sIdx}`} aria-hidden>
-                            <td colSpan={6} style={{ padding: 0 }}>
+                            <td colSpan={7} style={{ padding: 0 }}>
                               <div
                                 style={{
                                   height: 1,
@@ -2302,7 +2333,7 @@ function formatWarningDetails(w: PlannerWarning): string {
                               const isExcluded = excludedSlots.has(slotKey);
                               
                               return (
-                                <tr key={`${slot.key}-req-${reqIdx}`}>
+                                <tr key={`${slot.key}-${reqIdx}`}>
                                   {isFirstRow && missionCell}
                                   {isFirstRow && timeCell}
                                   
@@ -2324,6 +2355,9 @@ function formatWarningDetails(w: PlannerWarning): string {
                                       }}
                                     />
                                   </td>
+                                  
+                                  {/* Lock column - empty for unassigned slots */}
+                                  <td className="p-2 border"></td>
                                   
                                   {/* Role column */}
                                   <td className="p-2 border">{reqSlot.roleName ?? ""}</td>
@@ -2392,11 +2426,31 @@ function formatWarningDetails(w: PlannerWarning): string {
                       if (requiredSlots.length === 0) {
                         requiredSlots.push({ roleName: guessRoleFromMissionName(g.missionName), roleId: null, index: 0 });
                       }
+                      
+                      // Sort requiredSlots by role for stable row positions
+                      // This ensures rows don't jump when assignments change
+                      // The index field is preserved to maintain uniqueness in slot keys
+                      requiredSlots.sort((a, b) => {
+                        // Sort by roleName first, then by roleId
+                        if (a.roleName !== b.roleName) {
+                          if (a.roleName === null) return 1;
+                          if (b.roleName === null) return -1;
+                          return a.roleName.localeCompare(b.roleName);
+                        }
+                        if (a.roleId !== b.roleId) {
+                          if (a.roleId === null) return 1;
+                          if (b.roleId === null) return -1;
+                          return a.roleId - b.roleId;
+                        }
+                        return a.index - b.index;
+                      });
 
                       // Map existing assignments to their roles for efficient lookup
+                      // Sort rowsForSlot by ID to ensure deterministic matching
+                      const sortedRowsForSlot = [...rowsForSlot].sort((a, b) => a.id - b.id);
                       const assignmentByRoleId = new Map<number | null, FlatRosterItem>();
                       const assignmentByRoleName = new Map<string | null, FlatRosterItem>();
-                      for (const r of rowsForSlot) {
+                      for (const r of sortedRowsForSlot) {
                         // Try to get role_id from the assignment (it might be in the API response even if not in the type)
                         const roleId = (r as any).role_id;
                         if (roleId != null) {
@@ -2410,37 +2464,63 @@ function formatWarningDetails(w: PlannerWarning): string {
                       // Build complete list: required slots, marked as assigned or unassigned
                       // Track which assignments we've already used to avoid duplicates
                       const usedAssignmentIds = new Set<number>();
+                      // Track assignments per role to ensure stable matching
+                      const assignmentsByRoleIdList = new Map<number | null, FlatRosterItem[]>();
+                      const assignmentsByRoleNameList = new Map<string | null, FlatRosterItem[]>();
+                      for (const r of sortedRowsForSlot) {
+                        const roleId = (r as any).role_id;
+                        if (roleId != null) {
+                          const list = assignmentsByRoleIdList.get(roleId) || [];
+                          list.push(r);
+                          assignmentsByRoleIdList.set(roleId, list);
+                        }
+                        if (r.role) {
+                          const list = assignmentsByRoleNameList.get(r.role) || [];
+                          list.push(r);
+                          assignmentsByRoleNameList.set(r.role, list);
+                        }
+                      }
+                      // Sort all lists by assignment ID for stable matching
+                      for (const list of assignmentsByRoleIdList.values()) {
+                        list.sort((a, b) => a.id - b.id);
+                      }
+                      for (const list of assignmentsByRoleNameList.values()) {
+                        list.sort((a, b) => a.id - b.id);
+                      }
                       
                       const completeRows: Array<{ 
                         requiredSlot: { roleName: string | null; roleId: number | null; index: number };
                         assignment: FlatRosterItem | null;
-                      }> = requiredSlots.map(reqSlot => {
+                        slotIndex: number;
+                      }> = requiredSlots.map((reqSlot, slotIndex) => {
                         // Try to find matching assignment by roleId or roleName
                         let assignment: FlatRosterItem | null = null;
                         if (reqSlot.roleId != null) {
-                          const candidate = assignmentByRoleId.get(reqSlot.roleId);
-                          if (candidate && !usedAssignmentIds.has(candidate.id)) {
-                            assignment = candidate;
-                            usedAssignmentIds.add(candidate.id);
+                          // Get ALL assignments for this role, sorted by ID for stability
+                          const candidates = (assignmentsByRoleIdList.get(reqSlot.roleId) || []).filter(r => !usedAssignmentIds.has(r.id));
+                          if (candidates.length > 0) {
+                            assignment = candidates[0]; // Already sorted by ID
+                            usedAssignmentIds.add(assignment.id);
                           }
                         }
                         if (!assignment && reqSlot.roleName != null) {
-                          const candidate = assignmentByRoleName.get(reqSlot.roleName);
-                          if (candidate && !usedAssignmentIds.has(candidate.id)) {
-                            assignment = candidate;
-                            usedAssignmentIds.add(candidate.id);
+                          // Get ALL assignments for this role name, sorted by ID for stability
+                          const candidates = (assignmentsByRoleNameList.get(reqSlot.roleName) || []).filter(r => !usedAssignmentIds.has(r.id));
+                          if (candidates.length > 0) {
+                            assignment = candidates[0]; // Already sorted by ID
+                            usedAssignmentIds.add(assignment.id);
                           }
                         }
                         // For generic slots (roleId and roleName both null), try to find any available assignment
                         if (!assignment && reqSlot.roleId === null && reqSlot.roleName === null) {
-                          // Find the first unused assignment in this slot
-                          const candidate = rowsForSlot.find(r => !usedAssignmentIds.has(r.id));
+                          // Find the first unused assignment in this slot (already sorted by ID)
+                          const candidate = sortedRowsForSlot.find(r => !usedAssignmentIds.has(r.id));
                           if (candidate) {
                             assignment = candidate;
                             usedAssignmentIds.add(candidate.id);
                           }
                         }
-                        return { requiredSlot: reqSlot, assignment };
+                        return { requiredSlot: reqSlot, assignment, slotIndex };
                       });
 
                       const totalRowCount = completeRows.length || 1;
@@ -2463,11 +2543,11 @@ function formatWarningDetails(w: PlannerWarning): string {
                       return (
                         <React.Fragment key={slot.key}>
                           {slotDivider}
-                          {completeRows.map((rowData, rowIdx) => {
-                            const { requiredSlot, assignment } = rowData;
+                          {completeRows.map((rowData) => {
+                            const { requiredSlot, assignment, slotIndex } = rowData;
                             
-                            // Create a unique key for this slot using mission slot times AND row index
-                            // The rowIdx ensures each slot within the same time window is unique
+                            // Create a unique key for this slot using mission slot times AND slot index
+                            // The slotIndex ensures each slot within the same time window is unique and stable
                             // Use mission slot times (not assignment times) to keep keys stable across reloads
                             const slotKey = (() => {
                               // Get the actual ISO times from mission slots (same for assigned and empty slots)
@@ -2479,38 +2559,39 @@ function formatWarningDetails(w: PlannerWarning): string {
                                 const isOvernight = parseInt(missionSlot.start_time.split(':')[0]) >= parseInt(missionSlot.end_time.split(':')[0]);
                                 const endDayISO = isOvernight ? shiftDay(day, 1) : day;
                                 const endISO = `${endDayISO}T${missionSlot.end_time}:00`;
-                                // Use rowIdx to make each role slot unique within the same time window
-                                return `${g.missionId}_${requiredSlot.roleId || 'GENERIC'}_${startISO}_${endISO}_${rowIdx}`;
+                                // Use slotIndex to make each role slot unique within the same time window (stable across reorderings)
+                                return `${g.missionId}_${requiredSlot.roleId || 'GENERIC'}_${startISO}_${endISO}_${slotIndex}`;
                               }
                               // Fallback if no slot data
-                              return `${g.missionId}_${requiredSlot.roleId || 'GENERIC'}_${slot.startLabel}_${slot.endLabel}_${rowIdx}`;
+                              return `${g.missionId}_${requiredSlot.roleId || 'GENERIC'}_${slot.startLabel}_${slot.endLabel}_${slotIndex}`;
                             })();
                             const isExcluded = excludedSlots.has(slotKey);
                             
                             if (!assignment) {
                               // This required slot is unassigned
                               return (
-                                <tr key={`${slot.key}-unassigned-${rowIdx}`}>
-                                  {rowIdx === 0 && nonEmptyMissionCell}
-                                  {rowIdx === 0 && nonEmptyTimeCell}
-                                  <td className="p-2 border">
-                                    <input
-                                      type="checkbox"
-                                      checked={isExcluded}
-                                      onChange={(e) => {
-                                        setExcludedSlots(prev => {
-                                          const next = new Set(prev);
-                                          if (e.target.checked) {
-                                            next.add(slotKey);
-                                          } else {
-                                            next.delete(slotKey);
-                                          }
-                                          return next;
-                                        });
-                                      }}
-                                    />
-                                  </td>
-                                  <td className="p-2 border">{requiredSlot.roleName ?? ""}</td>
+                                <tr key={`${slot.key}-${slotIndex}`}>
+                                {slotIndex === 0 && nonEmptyMissionCell}
+                                {slotIndex === 0 && nonEmptyTimeCell}
+                                <td className="p-2 border">
+                                  <input
+                                    type="checkbox"
+                                    checked={isExcluded}
+                                    onChange={(e) => {
+                                      setExcludedSlots(prev => {
+                                        const next = new Set(prev);
+                                        if (e.target.checked) {
+                                          next.add(slotKey);
+                                        } else {
+                                          next.delete(slotKey);
+                                        }
+                                        return next;
+                                      });
+                                    }}
+                                  />
+                                </td>
+                                <td className="p-2 border">{/* Lock column - empty for unassigned slots */}</td>
+                                <td className="p-2 border">{requiredSlot.roleName ?? ""}</td>
                                   <td className="p-2 border">
                                     <div className="flex items-center gap-2">
                                       <span className="italic text-gray-500" style={{ color: "crimson" }}>
@@ -2568,23 +2649,60 @@ function formatWarningDetails(w: PlannerWarning): string {
                             const pillItems = [...basePills, ...restrictedPill];
 
                             return (
-                              <tr key={`${slot.key}__${r.id}`}>
-                                {rowIdx === 0 && nonEmptyMissionCell}
-                                {rowIdx === 0 && nonEmptyTimeCell}
+                              <tr key={`${slot.key}-${slotIndex}`}>
+                                {slotIndex === 0 && nonEmptyMissionCell}
+                                {slotIndex === 0 && nonEmptyTimeCell}
                                 <td className="p-2 border">
                                   <input
                                     type="checkbox"
                                     checked={isExcluded}
                                     onChange={(e) => {
-                                      setExcludedSlots(prev => {
-                                        const next = new Set(prev);
-                                        if (e.target.checked) {
+                                      if (e.target.checked) {
+                                        // When checking exclusion, uncheck lock
+                                        setLockedAssignments(prev => {
+                                          const next = new Set(prev);
+                                          next.delete(r.id);
+                                          return next;
+                                        });
+                                        setExcludedSlots(prev => {
+                                          const next = new Set(prev);
                                           next.add(slotKey);
-                                        } else {
+                                          return next;
+                                        });
+                                      } else {
+                                        setExcludedSlots(prev => {
+                                          const next = new Set(prev);
                                           next.delete(slotKey);
-                                        }
-                                        return next;
-                                      });
+                                          return next;
+                                        });
+                                      }
+                                    }}
+                                  />
+                                </td>
+                                <td className="p-2 border">
+                                  <input
+                                    type="checkbox"
+                                    checked={lockedAssignments.has(r.id)}
+                                    onChange={(e) => {
+                                      if (e.target.checked) {
+                                        // When checking lock, uncheck exclusion
+                                        setExcludedSlots(prev => {
+                                          const next = new Set(prev);
+                                          next.delete(slotKey);
+                                          return next;
+                                        });
+                                        setLockedAssignments(prev => {
+                                          const next = new Set(prev);
+                                          next.add(r.id);
+                                          return next;
+                                        });
+                                      } else {
+                                        setLockedAssignments(prev => {
+                                          const next = new Set(prev);
+                                          next.delete(r.id);
+                                          return next;
+                                        });
+                                      }
                                     }}
                                   />
                                 </td>

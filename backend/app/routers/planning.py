@@ -30,6 +30,7 @@ class FillRequest(BaseModel):
     shuffle: bool = False  # NEW: randomize pools / RR cursors to generate a different (still valid) plan
     random_seed: Optional[int] = None  # NEW: deterministic shuffle if provided
     exclude_slots: Optional[List[str]] = None  # NEW: slot keys to exclude from assignment
+    locked_assignments: Optional[List[int]] = None  # NEW: assignment IDs to preserve during fill/shuffle
 
 class PlanResultItem(BaseModel):
     mission: dict
@@ -557,14 +558,19 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
     if req.replace:
         ids_to_clear = [mm.id for mm in mission_list]
         if ids_to_clear:
+            # Build delete statement
+            delete_conditions = [
+                Assignment.mission_id.in_(ids_to_clear),
+                Assignment.start_at >= day_start_aware,
+                Assignment.start_at < day_end_aware,
+            ]
+            
+            # Exclude locked assignments from deletion
+            if req.locked_assignments:
+                delete_conditions.append(~Assignment.id.in_(req.locked_assignments))
+            
             # Use timezone-aware datetimes for WHERE clause comparison with database
-            stmt = delete(Assignment).where(
-                and_(
-                    Assignment.mission_id.in_(ids_to_clear),
-                    Assignment.start_at >= day_start_aware,
-                    Assignment.start_at < day_end_aware,
-                )
-            )
+            stmt = delete(Assignment).where(and_(*delete_conditions))
             db.execute(stmt)
 
             # Rebuild lookups from DB after delete
