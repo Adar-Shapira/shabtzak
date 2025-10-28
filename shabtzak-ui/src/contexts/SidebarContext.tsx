@@ -19,6 +19,8 @@ export interface SidebarActions {
   totalSoldiers?: number;
   availableToday?: number;
   onVacationToday?: number;
+  isLocked?: boolean;
+  lockedText?: string;
 }
 
 interface SidebarContextType {

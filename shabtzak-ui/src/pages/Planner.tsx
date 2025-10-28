@@ -210,7 +210,6 @@ export default function Planner() {
       return {};
     }
   });
-  const locked = !!lockedByDay[day];
 
   const [listBusy, setListBusy] = useState(false);
   const [rows, setRows] = useState<FlatRosterItem[]>([]);
@@ -1825,6 +1824,7 @@ function formatWarningDetails(w: PlannerWarning): string {
   }, [lockedByDay]);
 
   // Register sidebar actions
+  const locked = !!lockedByDay[day];
   useEffect(() => {
     setActions({
       currentDay: day,
@@ -1837,10 +1837,12 @@ function formatWarningDetails(w: PlannerWarning): string {
       onLockToggle: () => {
         setLockedByDay(prev => ({ ...prev, [day]: !prev[day] }));
       },
+      isLocked: locked,
+      lockedText: locked ? "פתח" : "נעל",
     });
     return () => setActions({});
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [setActions, day, lockedByDay]);
+  }, [setActions, day, lockedByDay, locked]);
 
   useEffect(() => {
     try {
@@ -1864,6 +1866,9 @@ function formatWarningDetails(w: PlannerWarning): string {
 
   return (
     <div className="p-4 space-y-4">
+      <div style={{ fontSize: 20, fontWeight: 600, marginBottom: 16, color: 'var(--fg)' }}>
+        {new Date(day + 'T00:00:00').toLocaleDateString('he-IL', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+      </div>
 
       {/*results && (
         <div className="space-y-2">

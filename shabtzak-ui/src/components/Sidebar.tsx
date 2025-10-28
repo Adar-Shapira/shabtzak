@@ -1,68 +1,59 @@
 // shabtzak-ui\src\components\Sidebar.tsx
 import { useLocation } from "react-router-dom";
 import { useSidebar } from "../contexts/SidebarContext";
+import { useRef } from "react";
+import PersonAddIcon from '@mui/icons-material/PersonAdd';
+import AddBusinessIcon from '@mui/icons-material/AddBusiness';
+import ManageAccountsIcon from '@mui/icons-material/ManageAccounts';
+import AddTaskIcon from '@mui/icons-material/AddTask';
+import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import ShuffleIcon from '@mui/icons-material/Shuffle';
+import DeleteIcon from '@mui/icons-material/Delete';
+import FileDownloadIcon from '@mui/icons-material/FileDownload';
+import PeopleIcon from '@mui/icons-material/People';
+import LockIcon from '@mui/icons-material/Lock';
+import LockOpenIcon from '@mui/icons-material/LockOpen';
+import CalendarTodayIcon from '@mui/icons-material/CalendarToday';
 
-interface SidebarActions {
-  onAddSoldier?: () => void;
-  onAddDepartment?: () => void;
-  onManageRoles?: () => void;
-  onAddMission?: () => void;
-  onFillPlan?: () => void;
-  onShufflePlan?: () => void;
-  onDeletePlan?: () => void;
-  onExportFile?: () => void;
-  onAvailableSoldiers?: () => void;
-  onLockToggle?: () => void;
-  currentDay?: string;
-  onDayChange?: (day: string) => void;
-  currentMonth?: string;
-  onMonthChange?: (month: string) => void;
-  totalSoldiers?: number;
-  availableToday?: number;
-  onVacationToday?: number;
-}
-
-interface SidebarProps {
-  actions?: SidebarActions;
-}
 
 export default function Sidebar() {
   const { actions } = useSidebar();
   const location = useLocation();
   const path = location.pathname;
+  const dateInputRef = useRef<HTMLInputElement>(null);
+  const monthInputRef = useRef<HTMLInputElement>(null);
   
   // For Soldiers page
   if (path.includes('/soldiers')) {
     return (
       <aside className="sidebar">
         <div className="sidebar-section">
-          <h3 className="sidebar-title">פעולות</h3>
           <ul className="sidebar-actions">
             <li>
               <button 
-                className="btn primary" 
+                className="btn" 
                 onClick={actions?.onAddSoldier}
-                style={{ width: '100%' }}
+                title="הוסף חייל"
               >
-                הוסף חייל
+                <PersonAddIcon style={{ fontSize: 20 }} />
               </button>
             </li>
             <li>
               <button 
                 className="btn" 
                 onClick={actions?.onAddDepartment}
-                style={{ width: '100%' }}
+                title="הוסף מחלקה"
               >
-                הוסף מחלקה
+                <AddBusinessIcon style={{ fontSize: 20 }} />
               </button>
             </li>
             <li>
               <button 
                 className="btn" 
                 onClick={actions?.onManageRoles}
-                style={{ width: '100%' }}
+                title="נהל תפקידים"
               >
-                נהל תפקידים
+                <ManageAccountsIcon style={{ fontSize: 20 }} />
               </button>
             </li>
           </ul>
@@ -76,15 +67,14 @@ export default function Sidebar() {
     return (
       <aside className="sidebar">
         <div className="sidebar-section">
-          <h3 className="sidebar-title">פעולות</h3>
           <ul className="sidebar-actions">
             <li>
               <button 
-                className="btn primary" 
+                className="btn" 
                 onClick={actions?.onAddMission}
-                style={{ width: '100%' }}
+                title="הוסף משימה"
               >
-                הוסף משימה
+                <AddTaskIcon style={{ fontSize: 20 }} />
               </button>
             </li>
           </ul>
@@ -98,69 +88,78 @@ export default function Sidebar() {
     return (
       <aside className="sidebar">
         <div className="sidebar-section">
-          <h3 className="sidebar-title">פעולות</h3>
           <ul className="sidebar-actions">
             <li>
-              <label style={{ display: 'block', fontSize: 12, marginBottom: 8 }}>תאריך</label>
-              <input 
+              <input
+                ref={dateInputRef}
                 type="date"
                 value={actions?.currentDay || ''}
                 onChange={(e) => actions?.onDayChange?.(e.target.value)}
-                style={{ width: '100%', padding: '8px', borderRadius: '8px', border: '1px solid #4b5563', background: '#374151', color: '#e5e7eb' }}
+                style={{ position: 'absolute', opacity: 0, pointerEvents: 'none' }}
               />
+              <button 
+                className="btn" 
+                onClick={() => dateInputRef.current?.showPicker()}
+                title="בחר תאריך"
+              >
+                <CalendarTodayIcon style={{ fontSize: 20 }} />
+              </button>
             </li>
             <li>
               <button 
-                className="btn primary" 
+                className="btn" 
                 onClick={actions?.onFillPlan}
-                style={{ width: '100%' }}
+                disabled={actions?.isLocked}
+                title="מלא תכנית"
               >
-                מלא
+                <PlayArrowIcon style={{ fontSize: 20 }} />
               </button>
             </li>
             <li>
               <button 
                 className="btn" 
                 onClick={actions?.onShufflePlan}
-                style={{ width: '100%' }}
+                disabled={actions?.isLocked}
+                title="ערבב תכנית"
               >
-                ערבב
+                <ShuffleIcon style={{ fontSize: 20 }} />
               </button>
             </li>
             <li>
               <button 
                 className="btn" 
                 onClick={actions?.onDeletePlan}
-                style={{ width: '100%' }}
+                disabled={actions?.isLocked}
+                title="מחק תכנית"
               >
-                מחק
+                <DeleteIcon style={{ fontSize: 20 }} />
               </button>
             </li>
             <li>
               <button 
                 className="btn" 
                 onClick={actions?.onExportFile}
-                style={{ width: '100%' }}
+                title="ייצא קובץ"
               >
-                ייצא קובץ
+                <FileDownloadIcon style={{ fontSize: 20 }} />
               </button>
             </li>
             <li>
               <button 
                 className="btn" 
                 onClick={actions?.onAvailableSoldiers}
-                style={{ width: '100%' }}
+                title="חיילים זמינים"
               >
-                חיילים זמינים
+                <PeopleIcon style={{ fontSize: 20 }} />
               </button>
             </li>
             <li>
               <button 
                 className="btn" 
                 onClick={actions?.onLockToggle}
-                style={{ width: '100%' }}
+                title={actions?.lockedText || "נעל"}
               >
-                נעל
+                {actions?.isLocked ? <LockIcon style={{ fontSize: 20 }} /> : <LockOpenIcon style={{ fontSize: 20 }} />}
               </button>
             </li>
           </ul>
@@ -174,40 +173,49 @@ export default function Sidebar() {
     return (
       <aside className="sidebar">
         <div className="sidebar-section">
-          <h3 className="sidebar-title">פעולות</h3>
           <ul className="sidebar-actions">
             <li>
-              <label style={{ display: 'block', fontSize: 12, marginBottom: 8 }}>חודש</label>
-              <input 
+              <input
+                ref={monthInputRef}
                 type="month"
                 value={actions?.currentMonth || ''}
                 onChange={(e) => actions?.onMonthChange?.(e.target.value)}
-                style={{ width: '100%', padding: '8px', borderRadius: '8px', border: '1px solid #4b5563', background: '#374151', color: '#e5e7eb' }}
+                style={{ position: 'absolute', opacity: 0, pointerEvents: 'none' }}
               />
+              <button 
+                className="btn" 
+                onClick={() => monthInputRef.current?.showPicker()}
+                title="בחר חודש"
+              >
+                <CalendarTodayIcon style={{ fontSize: 20 }} />
+              </button>
             </li>
             <li>
-              <div style={{ textAlign: 'center', padding: 12, backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: 8 }}>
-                <div style={{ fontSize: 24, fontWeight: 700, color: '#60a5fa' }}>
-                  {actions?.totalSoldiers || 0}
-                </div>
-                <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 4 }}>סה"כ חיילים</div>
-              </div>
+              <button 
+                className="btn" 
+                title={'סה"כ חיילים'}
+                style={{ fontSize: '16px', fontWeight: 700, color: '#60a5fa' }}
+              >
+                {actions?.totalSoldiers || 0}
+              </button>
             </li>
             <li>
-              <div style={{ textAlign: 'center', padding: 12, backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: 8 }}>
-                <div style={{ fontSize: 24, fontWeight: 700, color: '#10b981' }}>
-                  {actions?.availableToday || 0}
-                </div>
-                <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 4 }}>זמינים היום</div>
-              </div>
+              <button 
+                className="btn" 
+                title="זמינים היום"
+                style={{ fontSize: '16px', fontWeight: 700, color: '#10b981' }}
+              >
+                {actions?.availableToday || 0}
+              </button>
             </li>
             <li>
-              <div style={{ textAlign: 'center', padding: 12, backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: 8 }}>
-                <div style={{ fontSize: 24, fontWeight: 700, color: '#f59e0b' }}>
-                  {actions?.onVacationToday || 0}
-                </div>
-                <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 4 }}>בחופשה היום</div>
-              </div>
+              <button 
+                className="btn" 
+                title="בחופשה היום"
+                style={{ fontSize: '16px', fontWeight: 700, color: '#f59e0b' }}
+              >
+                {actions?.onVacationToday || 0}
+              </button>
             </li>
           </ul>
         </div>

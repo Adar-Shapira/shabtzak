@@ -346,37 +346,6 @@ export default function ManpowerCalendarPage() {
 
       {err && <div style={{ color: "crimson", marginBottom: 12, marginTop: 12 }}>{err}</div>}
 
-      {/* Summary stats for today */}
-      <div style={{ 
-        display: "grid", 
-        gridTemplateColumns: "repeat(3, 1fr)", 
-        gap: 16, 
-        marginBottom: 24,
-        padding: 16,
-        backgroundColor: "rgba(255,255,255,0.02)",
-        border: "1px solid #1f2937",
-        borderRadius: 8,
-        marginTop: 24,
-      }}>
-        <div style={{ textAlign: "center" }}>
-          <div style={{ fontSize: 24, fontWeight: 700, color: "#60a5fa" }}>
-            {todayStats.total}
-          </div>
-          <div style={{ fontSize: 12, color: "#9ca3af", marginTop: 4 }}>סה"כ חיילים</div>
-        </div>
-        <div style={{ textAlign: "center" }}>
-          <div style={{ fontSize: 24, fontWeight: 700, color: "#10b981" }}>
-            {todayStats.available}
-          </div>
-          <div style={{ fontSize: 12, color: "#9ca3af", marginTop: 4 }}>זמינים היום</div>
-        </div>
-        <div style={{ textAlign: "center" }}>
-          <div style={{ fontSize: 24, fontWeight: 700, color: "#f59e0b" }}>
-            {todayStats.onVacation}
-          </div>
-          <div style={{ fontSize: 12, color: "#9ca3af", marginTop: 4 }}>בחופשה היום</div>
-        </div>
-      </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 1, border: "1px solid #1f2937" }}>
         {/* Week day headers */}
