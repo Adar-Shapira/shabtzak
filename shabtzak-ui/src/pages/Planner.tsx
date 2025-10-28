@@ -289,6 +289,11 @@ export default function Planner() {
     setIsHistoryOpen(true);
   }
 
+  // Confirmation modal states
+  const [confirmFillOpen, setConfirmFillOpen] = useState(false);
+  const [confirmShuffleOpen, setConfirmShuffleOpen] = useState(false);
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+
   const [pendingEmptySlot, setPendingEmptySlot] = useState<null | {
     missionId: number;
     roleId: number | null;      // if you want role-aware empty slots later
@@ -1739,9 +1744,9 @@ async function shufflePlanner() {
     setActions({
       currentDay: day,
       onDayChange: (newDay: string) => setDay(newDay),
-      onFillPlan: () => runPlanner(),
-      onShufflePlan: () => shufflePlanner(),
-      onDeletePlan: () => deletePlanForDay(),
+      onFillPlan: () => setConfirmFillOpen(true),
+      onShufflePlan: () => setConfirmShuffleOpen(true),
+      onDeletePlan: () => setConfirmDeleteOpen(true),
       onExportFile: () => exportCsv(),
       onAvailableSoldiers: () => openAvailableModal(),
       onLockToggle: () => {
@@ -2585,6 +2590,101 @@ async function shufflePlanner() {
           )}
         </div>
       )}
+
+      {/* Confirmation Modals */}
+      <Modal
+        open={confirmFillOpen}
+        onClose={() => setConfirmFillOpen(false)}
+        title="מלא תכנית"
+        footer={
+          <>
+            <button
+              className="btn"
+              onClick={() => {
+                setConfirmFillOpen(false);
+                runPlanner();
+              }}
+              style={{ backgroundColor: '#10b981', color: '#fff' }}
+            >
+              אישור
+            </button>
+            <button
+              className="btn"
+              onClick={() => setConfirmFillOpen(false)}
+              style={{ backgroundColor: '#6b7280' }}
+            >
+              ביטול
+            </button>
+          </>
+        }
+      >
+        <div style={{ color: '#e5e7eb' }}>
+          האם אתה בטוח שברצונך למלא תכנית עבור היום?
+        </div>
+      </Modal>
+
+      <Modal
+        open={confirmShuffleOpen}
+        onClose={() => setConfirmShuffleOpen(false)}
+        title="ערבב תכנית"
+        footer={
+          <>
+            <button
+              className="btn"
+              onClick={() => {
+                setConfirmShuffleOpen(false);
+                shufflePlanner();
+              }}
+              style={{ backgroundColor: '#10b981', color: '#fff' }}
+            >
+              אישור
+            </button>
+            <button
+              className="btn"
+              onClick={() => setConfirmShuffleOpen(false)}
+              style={{ backgroundColor: '#6b7280' }}
+            >
+              ביטול
+            </button>
+          </>
+        }
+      >
+        <div style={{ color: '#e5e7eb' }}>
+          האם אתה בטוח שברצונך לערבב תכנית עבור היום? כל ההקצאות הקיימות תימחקנה ותחלופנה.
+        </div>
+      </Modal>
+
+      <Modal
+        open={confirmDeleteOpen}
+        onClose={() => setConfirmDeleteOpen(false)}
+        title="מחק תכנית"
+        footer={
+          <>
+            <button
+              className="btn"
+              onClick={() => {
+                setConfirmDeleteOpen(false);
+                deletePlanForDay();
+              }}
+              style={{ backgroundColor: '#ef4444', color: '#fff' }}
+            >
+              מחק
+            </button>
+            <button
+              className="btn"
+              onClick={() => setConfirmDeleteOpen(false)}
+              style={{ backgroundColor: '#6b7280' }}
+            >
+              ביטול
+            </button>
+          </>
+        }
+      >
+        <div style={{ color: '#e5e7eb' }}>
+          האם אתה בטוח שברצונך למחוק את כל ההקצאות של היום? פעולה זו אינה ניתנת לביטול.
+        </div>
+      </Modal>
+
       </div>
     </div>
   );

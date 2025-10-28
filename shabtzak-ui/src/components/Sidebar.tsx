@@ -95,7 +95,7 @@ export default function Sidebar() {
                 type="date"
                 value={actions?.currentDay || ''}
                 onChange={(e) => actions?.onDayChange?.(e.target.value)}
-                style={{ position: 'absolute', opacity: 0, pointerEvents: 'none' }}
+                style={{ position: 'absolute', opacity: 0, pointerEvents: 'none', width: '1px', height: '1px' }}
               />
               <button 
                 className="btn" 
@@ -180,7 +180,7 @@ export default function Sidebar() {
                 type="month"
                 value={actions?.currentMonth || ''}
                 onChange={(e) => actions?.onMonthChange?.(e.target.value)}
-                style={{ position: 'absolute', opacity: 0, pointerEvents: 'none' }}
+                style={{ position: 'absolute', opacity: 0, pointerEvents: 'none', width: '1px', height: '1px' }}
               />
               <button 
                 className="btn" 
