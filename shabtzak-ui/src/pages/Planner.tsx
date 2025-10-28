@@ -627,7 +627,8 @@ async function shufflePlanner() {
   async function deletePlanForDay() {
     setBusy(true);
     try {
-      await clearPlan(day);
+      // Pass locked assignments to preserve them
+      await clearPlan(day, undefined, Array.from(lockedAssignments));
       await loadAllAssignments();
       await loadWarnings(day);
       await loadDayRosterForWarnings(day);

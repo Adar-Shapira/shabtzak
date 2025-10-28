@@ -139,6 +139,7 @@ def roster(
 class ClearRequest(BaseModel):
     day: str  # YYYY-MM-DD
     mission_ids: Optional[List[int]] = None
+    locked_assignment_ids: Optional[List[int]] = None
 
 @router.post("/clear")
 def clear_plan(payload: dict, db: Session = Depends(get_db)):
@@ -147,6 +148,7 @@ def clear_plan(payload: dict, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Missing 'day'")
 
     mission_ids = payload.get("mission_ids") or None
+    locked_assignment_ids = payload.get("locked_assignment_ids") or None
     day_start, day_end = _local_midnight_bounds(day)
 
     conds = [
@@ -156,6 +158,10 @@ def clear_plan(payload: dict, db: Session = Depends(get_db)):
 
     if mission_ids:
         conds.append(Assignment.mission_id.in_(mission_ids))
+    
+    # Exclude locked assignments from deletion
+    if locked_assignment_ids:
+        conds.append(~Assignment.id.in_(locked_assignment_ids))
 
     db.execute(delete(Assignment).where(and_(*conds)))
     db.commit()
@@ -374,6 +380,12 @@ def delete_assignment(assignment_id: int, db: Session = Depends(get_db)):
     a = db.get(Assignment, assignment_id)
     if not a:
         raise HTTPException(status_code=404, detail="Assignment not found")
+    
+    # Don't allow deletion of locked assignments (they should be unlocked first)
+    # Note: We can't check this server-side without knowing which assignments are locked
+    # The frontend should prevent deletion of locked assignments
+    # But we'll add a comment here for documentation
+    
     db.delete(a)
     db.commit()
     return {"deleted": assignment_id}

@@ -190,10 +190,13 @@ export async function getPlannerWarnings(day: string): Promise<PlannerWarning[]>
   return data;
 }
 
-export async function clearPlan(day: string, missionIds?: number[]): Promise<void> {
+export async function clearPlan(day: string, missionIds?: number[], lockedAssignmentIds?: number[]): Promise<void> {
   const body: any = { day };
   if (Array.isArray(missionIds) && missionIds.length > 0) {
     body.mission_ids = missionIds;
+  }
+  if (Array.isArray(lockedAssignmentIds) && lockedAssignmentIds.length > 0) {
+    body.locked_assignment_ids = lockedAssignmentIds;
   }
   await api.post("/assignments/clear", body);
 }

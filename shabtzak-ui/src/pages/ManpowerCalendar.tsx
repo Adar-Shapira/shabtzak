@@ -49,6 +49,9 @@ export default function ManpowerCalendarPage() {
   const [vacEnd, setVacEnd] = useState<string>("");
   const [vacNote, setVacNote] = useState<string>("");
 
+  // Search state for the available soldiers modal
+  const [searchQuery, setSearchQuery] = useState<string>("");
+
   const loadData = async () => {
     setLoading(true);
     setErr(null);
@@ -196,6 +199,7 @@ export default function ManpowerCalendarPage() {
 
   const openAvailableModal = (dayISO: string) => {
     setSelectedDate(dayISO);
+    setSearchQuery(""); // Reset search when opening modal
     
     // Calculate available soldiers for this day
     const available: Array<{ soldier: Soldier; leavingToday: boolean; returningToday: boolean }> = [];
@@ -418,14 +422,47 @@ export default function ManpowerCalendarPage() {
         maxWidth={720}
       >
         <div style={{ display: "grid", gap: 16 }}>
+          {/* Search Bar */}
+          <input
+            type="text"
+            placeholder="חפש חייל..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            style={{
+              padding: "10px 12px",
+              borderRadius: 8,
+              border: "1px solid #1f2937",
+              backgroundColor: "rgba(255,255,255,0.03)",
+              color: "#e5e7eb",
+              fontSize: 14,
+            }}
+          />
+
           {/* Available Soldiers Section */}
           <div>
-              <h3 style={{ marginBottom: 12, fontSize: 18, fontWeight: 600, color: "#e5e7eb" }}>זמינים ({availableSoldiers.length})</h3>
+              <h3 style={{ marginBottom: 12, fontSize: 18, fontWeight: 600, color: "#e5e7eb" }}>זמינים ({availableSoldiers.filter(({ soldier }) => 
+              !searchQuery || 
+              soldier.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+              soldier.department_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+              soldier.roles?.some(r => r.name.toLowerCase().includes(searchQuery.toLowerCase()))
+            ).length})</h3>
             {availableSoldiers.length === 0 ? (
               <div style={{ opacity: 0.7, padding: 8 }}>אין חיילים זמינים בתאריך זה</div>
+            ) : availableSoldiers.filter(({ soldier }) => 
+                !searchQuery || 
+                soldier.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                soldier.department_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                soldier.roles?.some(r => r.name.toLowerCase().includes(searchQuery.toLowerCase()))
+              ).length === 0 ? (
+              <div style={{ opacity: 0.7, padding: 8 }}>לא נמצאו תוצאות לחיפוש "{searchQuery}"</div>
             ) : (
               <div style={{ display: "grid", gap: 4, maxHeight: 300, overflowY: "auto" }}>
-                {availableSoldiers.map(({ soldier, leavingToday, returningToday }) => (
+                {availableSoldiers.filter(({ soldier }) => 
+                !searchQuery || 
+                soldier.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                soldier.department_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                soldier.roles?.some(r => r.name.toLowerCase().includes(searchQuery.toLowerCase()))
+              ).map(({ soldier, leavingToday, returningToday }) => (
                   <div key={soldier.id} style={{ padding: 10, border: "1px solid #1f2937", borderRadius: 8, backgroundColor: "rgba(255,255,255,0.02)" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       <div 
@@ -472,11 +509,26 @@ export default function ManpowerCalendarPage() {
           </div>
 
           {/* On Vacation Soldiers Section */}
-          {onVacationSoldiers.length > 0 && (
+          {onVacationSoldiers.filter(({ soldier }) => 
+            !searchQuery || 
+            soldier.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+            soldier.department_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+            soldier.roles?.some(r => r.name.toLowerCase().includes(searchQuery.toLowerCase()))
+          ).length > 0 && (
             <div>
-              <h3 style={{ marginBottom: 12, fontSize: 18, fontWeight: 600, color: "#9ca3af" }}>בחופשה ({onVacationSoldiers.length})</h3>
+              <h3 style={{ marginBottom: 12, fontSize: 18, fontWeight: 600, color: "#9ca3af" }}>בחופשה ({onVacationSoldiers.filter(({ soldier }) => 
+                !searchQuery || 
+                soldier.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                soldier.department_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                soldier.roles?.some(r => r.name.toLowerCase().includes(searchQuery.toLowerCase()))
+              ).length})</h3>
               <div style={{ display: "grid", gap: 4, maxHeight: 200, overflowY: "auto" }}>
-                {onVacationSoldiers.map(({ soldier, returnDate }) => (
+                {onVacationSoldiers.filter(({ soldier }) => 
+                  !searchQuery || 
+                  soldier.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                  soldier.department_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                  soldier.roles?.some(r => r.name.toLowerCase().includes(searchQuery.toLowerCase()))
+                ).map(({ soldier, returnDate }) => (
                   <div key={soldier.id} style={{ padding: 10, border: "1px solid #1f2937", borderRadius: 8, backgroundColor: "rgba(255,255,255,0.01)", opacity: 0.8 }}>
                     <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
                       <span 
