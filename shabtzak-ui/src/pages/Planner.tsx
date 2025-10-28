@@ -21,6 +21,7 @@ import SoldierHistoryModal from "../components/SoldierHistoryModal";
 import { getPlannerWarnings, type PlannerWarning } from "../api"
 import { listSoldierVacations, type Vacation } from "../api";
 import { useSidebar } from "../contexts/SidebarContext";
+import { useWarnings } from "../contexts/WarningsContext";
 
 
 type FlatRosterItem = {
@@ -197,6 +198,7 @@ function WarningsCell({ items }: { items: Array<{ type: string; color?: "red" | 
 
 export default function Planner() {
   const { setActions } = useSidebar();
+  const { setWarnings: setWarningsContext } = useWarnings();
   
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const [day, setDay] = useState<string>(today);
@@ -226,7 +228,6 @@ export default function Planner() {
   const [warnings, setWarnings] = useState<PlannerWarning[]>([])
   const [warnLoading, setWarnLoading] = useState(false)
   const [warnError, setWarnError] = useState<string | null>(null)
-
   const [rowsForWarnings, setRowsForWarnings] = useState<FlatRosterItem[]>([]);
 
   const [soldiersById, setSoldiersById] = useState<Map<number, Soldier>>(new Map());
@@ -351,6 +352,20 @@ export default function Planner() {
       setWarnError(null);
       const items = await getPlannerWarnings(forDay); // <-- pass day
       setWarnings(items);
+      // Update context with full warning details
+      const warningItems = items.map(w => ({
+        type: w.type,
+        soldier_name: w.soldier_name,
+        soldier_id: w.soldier_id,
+        mission_name: w.mission_name,
+        mission_id: w.mission_id,
+        start_at: w.start_at,
+        end_at: w.end_at,
+        details: w.details,
+        level: w.level,
+        assignment_id: w.assignment_id
+      }));
+      setWarningsContext(warningItems);
     } catch (e: any) {
       setWarnError(e?.message || "Failed to load warnings");
     } finally {
@@ -1541,45 +1556,6 @@ async function shufflePlanner() {
     return shiftDay(dayISO, 1);
   }
 
-  // Pretty-print a warning's time window by matching it to the configured MissionSlot for the selected day.
-  // Falls back to APP_TZ formatting if no slot overlaps.
-  function renderWarningTimeSlot(w: PlannerWarning): string {
-    const mission = allMissions.find((m: Mission) => (m.name ?? "") === (w.mission_name ?? ""));
-    if (!mission) {
-      return `${fmtWarn(w.start_at)} → ${fmtWarn(w.end_at)}`;
-    }
-
-    const slots = slotsByMission.get(mission.id) || [];
-    if (slots.length === 0) {
-      return `${fmtWarn(w.start_at)} → ${fmtWarn(w.end_at)}`;
-    }
-
-    const wStartMs = new Date(w.start_at).getTime();
-    const wEndMs   = new Date(w.end_at).getTime();
-
-    let best: { startLabel: string; endLabel: string; ov: number } | null = null;
-
-    for (const s of slots) {
-      const endDayISO = isOvernight(s.start_time, s.end_time) ? nextDayISO(day) : day;
-
-      const sStartMs = msFor(day, s.start_time);
-      const sEndMs   = msFor(endDayISO, s.end_time);
-
-      const ov = overlapMs(wStartMs, wEndMs, sStartMs, sEndMs);
-      if (ov > 0 && (!best || ov > best.ov)) {
-        best = {
-          startLabel: labelFor(day, s.start_time),
-          endLabel:   labelFor(endDayISO, s.end_time),
-          ov
-        };
-      }
-    }
-
-    if (best) {
-      return `${best.startLabel} → ${best.endLabel}`;
-    }
-    return `${fmtWarn(w.start_at)} → ${fmtWarn(w.end_at)}`;
-  }
 
   const grouped: Grouped = useMemo(() => {
     const byMission = new Map<string, Map<string, { startLabel: string; endLabel: string; items: FlatRosterItem[] }>>();
@@ -1688,92 +1664,6 @@ async function shufflePlanner() {
     return result;
   }, [sortedRows, allMissions, slotsByMission, day]);
 
-  // --- Warnings "Details" formatting helpers (fixed) ---
-
-function hmFromMs(ms: number): string {
-  try {
-    // UTC slice, no TZ math
-    return new Date(ms).toISOString().slice(11, 16);
-  } catch {
-    return "00:00";
-  }
-}
-
-function ms(iso: string): number {
-  return new Date(iso).getTime();
-}
-
-// Treat rows as the SAME assignment as the warning if they have (almost) identical window
-function isSameAssignmentWindow(w: PlannerWarning, r: { s: number; e: number }): boolean {
-  const wS = ms(w.start_at), wE = ms(w.end_at);
-  const EPS = 60 * 1000; // 1 minute tolerance to avoid off-by-seconds
-  return Math.abs(r.s - wS) < EPS && Math.abs(r.e - wE) < EPS;
-}
-
-function formatWarningDetails(w: PlannerWarning): string {
-  const wStart = ms(w.start_at);
-  const wEnd   = ms(w.end_at);
-
-  // All rows for this soldier across prev/day/next
-  const mine = rowsForWarnings
-    .filter(r =>
-      // match by id when we have it; fall back to name
-      ((w as any).soldier_id != null ? r.soldier_id === (w as any).soldier_id : r.soldier_name === w.soldier_name)
-    )
-    .map(r => ({
-      raw: r,
-      s: (r as any).start_epoch_ms ?? ms(r.start_at),
-      e: (r as any).end_epoch_ms   ?? ms(r.end_at),
-    }))
-    .filter(r => Number.isFinite(r.s) && Number.isFinite(r.e))
-    .sort((a, b) => a.s - b.s);
-
-  if (w.type === "OVERLAP") {
-    // Find the OTHER assignment that overlaps this warning window the most
-    let best: { raw: FlatRosterItem; s: number; e: number; ov: number } | null = null;
-    for (const r of mine) {
-      // skip the row that is effectively the same window as the warning itself
-      if (isSameAssignmentWindow(w, r)) continue;
-
-      const ov = Math.max(0, Math.min(wEnd, r.e) - Math.max(wStart, r.s));
-      if (ov > 0 && (!best || ov > best.ov)) best = { ...r, ov };
-    }
-
-    if (best) {
-      const otherMission = best.raw.mission?.name || "another mission";
-      // End of the *overlap* window (this is what users expect to see)
-      const overlapEndMs = Math.min(wEnd, best.e);
-      return `Overlaps with ${otherMission} assignment`;
-    }
-
-    // fallback
-    return w.details || "Overlaps with another assignment";
-  }
-
-  if (w.type === "REST") {
-    // Compute the smallest non-negative gap adjacent to THIS warning window only
-    const intervals = mine
-      .map(r => ({ s: r.s, e: r.e }))
-      .concat([{ s: wStart, e: wEnd }])
-      .sort((a, b) => a.s - b.s);
-
-    let minGap = Number.POSITIVE_INFINITY;
-    for (let i = 0; i < intervals.length - 1; i++) {
-      const gap = intervals[i + 1].s - intervals[i].e;
-      if (gap >= 0 && gap < minGap) minGap = gap;
-    }
-
-    if (Number.isFinite(minGap)) {
-      const totalMin = Math.max(0, Math.floor(minGap / 60000));
-      const h = String(Math.floor(totalMin / 60)).padStart(2, "0");
-      const m = String(totalMin % 60).padStart(2, "0");
-      return `Rest between missions is ${h}:${m}`;
-    }
-    return w.details || "Rest between missions is 00:00";
-  }
-
-  return w.details || "";
-}
 
   useEffect(() => {
     loadAllAssignments();
@@ -1866,9 +1756,9 @@ function formatWarningDetails(w: PlannerWarning): string {
 
   return (
     <div className="p-4 space-y-4">
-      <div style={{ fontSize: 20, fontWeight: 600, marginBottom: 16, color: 'var(--fg)' }}>
-        {new Date(day + 'T00:00:00').toLocaleDateString('he-IL', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
-      </div>
+        <div style={{ fontSize: 20, fontWeight: 600, marginBottom: 16, color: 'var(--fg)' }}>
+          {new Date(day + 'T00:00:00').toLocaleDateString('he-IL', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+        </div>
 
       {/*results && (
         <div className="space-y-2">
@@ -2020,57 +1910,8 @@ function formatWarningDetails(w: PlannerWarning): string {
         onClose={() => setIsHistoryOpen(false)}
       />
 
-      <section style={{ marginTop: 16, marginBottom: 16 }}>
-        <h2 style={{ marginBottom: 8 }}>התראות</h2>
-        {warnLoading && <div>בטעינה...</div>}
-        {!warnLoading && warnError && <div style={{ color: "crimson" }}>{warnError}</div>}
-        {!warnLoading && !warnError && warnings.length === 0 && (
-          <div style={{ opacity: 0.7 }}>(אין התראות)</div>
-        )}
-        {!warnLoading && !warnError && warnings.length > 0 && (
-          <div className="overflow-x-auto">
-            <table className="min-w-full border-collapse" style={{ width: "100%" }}>
-              <thead>
-                <tr>
-                  <th className="border p-2 text-left">סוג</th>
-                  <th className="border p-2 text-left">חייל</th>
-                  <th className="border p-2 text-left">משימה</th>
-                  <th className="border p-2 text-left">חלון זמן</th>
-                  <th className="border p-2 text-left">התראה</th>
-                  <th className="border p-2 text-left">פרטים</th>
-                </tr>
-              </thead>
-              <tbody>
-                {warnings.map((w, i) => (
-                  <tr key={i}>
-                    <td className="border p-2">{w.type}</td>
-                    <td className="border p-2">{w.soldier_name}</td>
-                    <td className="border p-2">{w.mission_name}</td>
-                    <td className="border p-2">{renderWarningTimeSlot(w)}</td>
-                    <td className="border p-2">
-                      {(() => {
-                        const color =
-                          w.level === "RED"
-                            ? "red"
-                            : w.level === "ORANGE"
-                            ? "orange"
-                            : w.type === "RESTRICTED"
-                            ? "gray"
-                            : undefined;
-                        return <WarningsCell items={[{ type: w.type, color }]} />;
-                      })()}
-                    </td>
-                    <td className="border p-2">{formatWarningDetails(w)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
 
       <div className="space-y-2">
-        <h2 className="font-medium">תכנית</h2>
 
         {listBusy && <div className="border rounded p-3 text-gray-500">בטעינה...</div>}
 
