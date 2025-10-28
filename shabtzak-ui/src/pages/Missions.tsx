@@ -4,6 +4,7 @@ import { api } from "../api";
 import Modal from "../components/Modal";
 import MissionSlotsModal from "../components/MissionSlotsModal";
 import { useDisclosure } from "../hooks/useDisclosure";
+import { useSidebar } from "../contexts/SidebarContext";
 import {
   listMissionSlots,
   createMissionSlot,
@@ -160,6 +161,8 @@ function MissionRequirementsEditor({ missionId, roles, initialTotal }: { mission
 /* --------------------------------- Page ---------------------------------- */
 
 export default function MissionsPage() {
+  const { setActions } = useSidebar();
+  
   const [rows, setRows] = useState<Mission[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
   const [err, setErr] = useState<string | null>(null);
@@ -217,6 +220,15 @@ export default function MissionsPage() {
       }
     })();
   }, []);
+
+  // Register sidebar actions
+  useEffect(() => {
+    setActions({
+      onAddMission: () => addDlg.open(),
+    });
+    return () => setActions({});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [setActions]);
 
   const loadSlots = async (missionId: number) => {
     setError("");
@@ -319,12 +331,6 @@ export default function MissionsPage() {
 
   return (
     <div style={{ maxWidth: 1100, margin: "24px auto", padding: 16 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h1>משימות</h1>
-        <button onClick={addDlg.open} style={{ padding: "8px 12px", borderRadius: 8 }}>
-          הוסף משימה
-        </button>
-      </div>
 
       <Modal open={addDlg.isOpen} onClose={addDlg.close} title="הוסף משימה" maxWidth={640}>
         <form onSubmit={createRow} style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 10 }}>

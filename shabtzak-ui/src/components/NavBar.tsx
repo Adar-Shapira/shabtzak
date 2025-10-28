@@ -9,7 +9,6 @@ export default function NavBar() {
   return (
     <header className="navbar">
       <div className="navbar-inner">
-        <div className="brand">שבצ"כ</div>
         <nav className="nav">
           {/*<NavLink to="/" end className={linkClass}>Home</NavLink>*/}
           {/*<NavLink to="/roles" className={linkClass}>Roles</NavLink>*/}

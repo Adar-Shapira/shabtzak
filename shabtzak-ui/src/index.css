@@ -25,9 +25,8 @@ a:hover {
 
 body {
   margin: 0;
-  display: flex;
-  place-items: center;
-  min-width: 320px;
+  padding: 0;
+  width: 100%;
   min-height: 100vh;
   direction: rtl;
   text-align: right;
@@ -82,20 +81,23 @@ button:focus-visible {
 
 * { box-sizing: border-box; }
 
-body { margin: 0; background: #0b0f1a; color: #e5e7eb; font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Cantarell, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji"; direction: rtl; text-align: right; }
+html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #0b0f1a; color: #e5e7eb; font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Cantarell, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji"; direction: rtl; text-align: right; }
 
-.app-shell { min-height: 100dvh; display: flex; flex-direction: column; }
+#root { width: 100%; min-height: 100vh; background: #0b0f1a; }
+
+.app-shell { min-height: 100dvh; width: 100%; display: flex; flex-direction: column; background: #0b0f1a; }
 
 .navbar {
   position: sticky; top: 0; z-index: 50;
+  width: 100%;
   background: linear-gradient(180deg, var(--bg), var(--bg-2));
   border-bottom: 1px solid var(--border);
   backdrop-filter: saturate(140%) blur(6px);
 }
 
 .navbar-inner {
-  max-width: 1200px; margin: 0 auto; padding: 10px 16px;
-  display: flex; align-items: center; gap: 16px; justify-content: space-between;
+  width: 100%; padding: 10px 16px;
+  display: flex; align-items: center; gap: 16px; justify-content: flex-start;
 }
 
 .brand { font-weight: 700; letter-spacing: 0.3px; color: var(--fg); }
@@ -114,9 +116,82 @@ body { margin: 0; background: #0b0f1a; color: #e5e7eb; font-family: Inter, ui-sa
   background: rgba(96,165,250,0.08);
 }
 
+.app-content {
+  display: flex;
+  flex: 1;
+  width: 100%;
+}
+
 .main {
   max-width: 1200px; width: 100%;
   margin: 0 auto; padding: 24px 16px;
+  flex: 1;
+}
+
+.sidebar {
+  width: 250px;
+  background: linear-gradient(180deg, var(--bg), var(--bg-2));
+  border-left: 1px solid var(--border);
+  padding: 24px 16px;
+  position: sticky;
+  top: 60px;
+  height: calc(100vh - 60px);
+  overflow-y: auto;
+}
+
+.sidebar-section {
+  margin-bottom: 24px;
+}
+
+.sidebar-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--fg);
+  margin: 0 0 16px 0;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sidebar-actions {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sidebar-actions li {
+  width: 100%;
+}
+
+.sidebar-actions .btn {
+  width: 100%;
+  text-align: right;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 8px 10px;
+  transition: 120ms ease-in-out;
+  font-size: 14px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+}
+
+.sidebar-actions .btn:hover {
+  border-color: var(--border);
+  background: rgba(255,255,255,0.04);
+}
+
+.sidebar-actions .btn.primary {
+  color: var(--accent-2);
+  border-color: rgba(96,165,250,0.35);
+  background: rgba(96,165,250,0.08);
+}
+
+.sidebar-actions .btn.primary:hover {
+  border-color: rgba(96,165,250,0.5);
+  background: rgba(96,165,250,0.12);
 }
 
 /* Tables & inputs (optional polish) */

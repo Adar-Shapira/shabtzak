@@ -3,6 +3,7 @@ import { useEffect, useState, useMemo } from "react";
 import { api } from "../api";
 import Modal from "../components/Modal";
 import { useDisclosure } from "../hooks/useDisclosure";
+import { useSidebar, type SidebarActions } from "../contexts/SidebarContext";
 
 type Soldier = {
   id: number;
@@ -26,6 +27,8 @@ function isInRange(d: string, start: string, end: string): boolean {
 }
 
 export default function ManpowerCalendarPage() {
+  const { setActions } = useSidebar();
+  
   const [soldiers, setSoldiers] = useState<Soldier[]>([]);
   const [vacations, setVacations] = useState<Vacation[]>([]);
   const [loading, setLoading] = useState(false);
@@ -33,10 +36,10 @@ export default function ManpowerCalendarPage() {
 
   // Calendar state
   const [currentMonth, setCurrentMonth] = useState(new Date());
+  const [selectedModalDate, setSelectedModalDate] = useState<string | null>(null);
   
   // Modal for available soldiers
   const modal = useDisclosure(false);
-  const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [availableSoldiers, setAvailableSoldiers] = useState<Array<{ soldier: Soldier; leavingToday: boolean; returningToday: boolean }>>([]);
   const [onVacationSoldiers, setOnVacationSoldiers] = useState<Array<{ soldier: Soldier; leavingToday: boolean; returningToday: boolean; returnDate?: string }>>([]);
 
@@ -78,6 +81,12 @@ export default function ManpowerCalendarPage() {
   useEffect(() => {
     loadData();
   }, []);
+
+  // Register sidebar actions (will be updated when todayStats is calculated)
+  useEffect(() => {
+    return () => setActions({});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [setActions]);
 
   // Open vacation modal for a soldier
   const openVacations = async (s: Soldier) => {
@@ -200,7 +209,7 @@ export default function ManpowerCalendarPage() {
   }, [currentMonth]);
 
   const openAvailableModal = (dayISO: string) => {
-    setSelectedDate(dayISO);
+    setSelectedModalDate(dayISO);
     setSearchQuery(""); // Reset search when opening modal
     setFilterRole(""); // Reset role filter
     setFilterDepartment(""); // Reset department filter
@@ -260,13 +269,6 @@ export default function ManpowerCalendarPage() {
     return { available: availableCount, total: soldiers.length };
   };
 
-  const previousMonth = () => {
-    setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1));
-  };
-
-  const nextMonth = () => {
-    setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1));
-  };
 
   const monthNames = ["ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני", "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר", "דצמבר"];
   const weekDays = ["א", "ב", "ג", "ד", "ה", "ו", "ש"];
@@ -298,6 +300,28 @@ export default function ManpowerCalendarPage() {
     return { available: availableCount, onVacation: onVacationCount, total: soldiers.length };
   }, [soldiers, vacations, todayISO]);
 
+  // Update sidebar with current stats
+  const currentMonthString = useMemo(() => {
+    const year = currentMonth.getFullYear();
+    const month = String(currentMonth.getMonth() + 1).padStart(2, '0');
+    return `${year}-${month}`;
+  }, [currentMonth]);
+
+  useEffect(() => {
+    const actions: SidebarActions = {
+      currentMonth: currentMonthString,
+      onMonthChange: (monthString: string) => {
+        // monthString is in format YYYY-MM
+        const [year, month] = monthString.split('-').map(Number);
+        setCurrentMonth(new Date(year, month - 1));
+      },
+      totalSoldiers: todayStats.total,
+      availableToday: todayStats.available,
+      onVacationToday: todayStats.onVacation,
+    };
+    setActions(actions);
+  }, [setActions, todayStats, currentMonthString]);
+
   if (loading) {
     return <div style={{ padding: 24 }}>בטעינה...</div>;
   }
@@ -316,15 +340,8 @@ export default function ManpowerCalendarPage() {
 
   return (
     <div style={{ maxWidth: 1200, margin: "24px auto", padding: 16 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <h1>סד"כ</h1>
-        <div style={{ display: "flex", gap: 8 }}>
-          <button onClick={previousMonth} style={{ padding: "8px 12px", borderRadius: 8 }}>&#8249;</button>
-          <div style={{ padding: "8px 16px" }}>
-            {monthNames[currentMonth.getMonth()]} {currentMonth.getFullYear()}
-          </div>
-          <button onClick={nextMonth} style={{ padding: "8px 12px", borderRadius: 8 }}>&#8250;</button>
-        </div>
+      <div style={{ padding: "8px 16px", textAlign: "center", fontSize: 18, fontWeight: 600, marginBottom: 16 }}>
+        {monthNames[currentMonth.getMonth()]} {currentMonth.getFullYear()}
       </div>
 
       {err && <div style={{ color: "crimson", marginBottom: 12, marginTop: 12 }}>{err}</div>}
@@ -422,7 +439,7 @@ export default function ManpowerCalendarPage() {
       <Modal
         open={modal.isOpen}
         onClose={modal.close}
-        title={selectedDate ? `חיילים זמינים — ${selectedDate}` : "חיילים זמינים"}
+        title={selectedModalDate ? `חיילים זמינים — ${selectedModalDate}` : "חיילים זמינים"}
         maxWidth={720}
       >
         <div style={{ display: "grid", gap: 16 }}>

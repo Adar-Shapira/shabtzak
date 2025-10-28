@@ -6,6 +6,7 @@ import Modal from "../components/Modal";
 import { useDisclosure } from "../hooks/useDisclosure";
 import { listMissions, getSoldierMissionRestrictions, putSoldierMissionRestrictions, type Mission } from "../api";
 import SoldierHistoryModal from "../components/SoldierHistoryModal"
+import { useSidebar } from "../contexts/SidebarContext";
 
 
 type Role = { 
@@ -47,6 +48,8 @@ function byName(a: Soldier, b: Soldier) {
 }
 
 export default function SoldiersPage() {
+    const { setActions } = useSidebar();
+    
     const [roles, setRoles] = useState<Role[]>([]);
     const [departments, setDepartments] = useState<Department[]>([]);
     const [missions, setMissions] = useState<Mission[]>([]);
@@ -437,6 +440,23 @@ export default function SoldiersPage() {
 
     useEffect(() => { loadAll(); }, []);
 
+    // Register sidebar actions
+    useEffect(() => {
+        setActions({
+            onAddSoldier: () => {
+                addDlg.open();
+            },
+            onAddDepartment: () => {
+                startAddDept();
+            },
+            onManageRoles: () => {
+                startAddRole();
+            },
+        });
+        return () => setActions({});
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [setActions]);
+
     // Always refresh the list whenever the Vacations modal opens
     useEffect(() => {
         if (vacDlg.isOpen && vacSoldier) {
@@ -544,20 +564,6 @@ export default function SoldiersPage() {
     return (
         <div style={{ maxWidth: 1200, margin: "24px auto", padding: 16, fontFamily: "sans-serif" }}>
 
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <h1>חיילים</h1>
-                <div style={{ display: "flex", gap: 8 }}>
-                    <button onClick={() => rolesDlg.open()} style={{ padding: "8px 12px", borderRadius: 8 }}>
-                    נהל תפקידים
-                    </button>
-                    <button onClick={startAddDept} style={{ padding: "8px 12px", borderRadius: 8 }}>
-                    הוסף מחלקה
-                    </button>
-                    <button onClick={addDlg.open} style={{ padding: "8px 12px", borderRadius: 8 }}>
-                    הוסף חייל
-                    </button>
-                </div>
-            </div>
 
             <Modal open={addDlg.isOpen} onClose={addDlg.close} title="Add Soldier" maxWidth={720}>
                 <form

@@ -20,6 +20,7 @@ import Modal from "../components/Modal";
 import SoldierHistoryModal from "../components/SoldierHistoryModal";
 import { getPlannerWarnings, type PlannerWarning } from "../api"
 import { listSoldierVacations, type Vacation } from "../api";
+import { useSidebar } from "../contexts/SidebarContext";
 
 
 type FlatRosterItem = {
@@ -195,6 +196,8 @@ function WarningsCell({ items }: { items: Array<{ type: string; color?: "red" | 
 }
 
 export default function Planner() {
+  const { setActions } = useSidebar();
+  
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const [day, setDay] = useState<string>(today);
 
@@ -1821,6 +1824,24 @@ function formatWarningDetails(w: PlannerWarning): string {
     }
   }, [lockedByDay]);
 
+  // Register sidebar actions
+  useEffect(() => {
+    setActions({
+      currentDay: day,
+      onDayChange: (newDay: string) => setDay(newDay),
+      onFillPlan: () => runPlanner(),
+      onShufflePlan: () => shufflePlanner(),
+      onDeletePlan: () => deletePlanForDay(),
+      onExportFile: () => exportCsv(),
+      onAvailableSoldiers: () => openAvailableModal(),
+      onLockToggle: () => {
+        setLockedByDay(prev => ({ ...prev, [day]: !prev[day] }));
+      },
+    });
+    return () => setActions({});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [setActions, day, lockedByDay]);
+
   useEffect(() => {
     try {
       const key = `planner.excludedSlots.${day}`;
@@ -1843,69 +1864,6 @@ function formatWarningDetails(w: PlannerWarning): string {
 
   return (
     <div className="p-4 space-y-4">
-      <h1 className="text-xl font-semibold">שיבוץ</h1>
-
-      <div className="flex items-center gap-3">
-        <label className="text-sm">תאריך</label>
-        <input
-          type="date"
-          value={day}
-          onChange={(e) => setDay(e.target.value)}
-          className="border rounded px-2 py-1"
-        />
-        <button
-          onClick={runPlanner}
-          disabled={busy || locked}
-          className="border rounded px-3 py-1 hover:bg-gray-50 disabled:opacity-50"
-        >
-          {busy ? "ממלא..." : "מלא"}
-        </button>
-        <button
-          onClick={shufflePlanner}
-          disabled={busy || locked}
-          className="border rounded px-3 py-1 hover:bg-gray-50 disabled:opacity-50"
-        >
-          {busy ? "מערבב..." : "ערבב"}
-        </button>
-        <button
-          onClick={deletePlanForDay}
-          disabled={busy || locked}
-          className="border rounded px-3 py-1 hover:bg-gray-50 disabled:opacity-50"
-          style={{ marginLeft: 8 }}
-        >
-          {busy ? "במחיקה..." : "מחק"}
-        </button>
-        <button
-          onClick={exportCsv}
-          disabled={busy || listBusy}
-          className="border rounded px-3 py-1 hover:bg-gray-50 disabled:opacity-50"
-          style={{ marginLeft: 8 }}
-        >
-          {busy ? "מכין קובץ..." : "ייצא קובץ"}
-        </button>
-                <button
-          onClick={openAvailableModal}
-          disabled={busy || listBusy}
-          className="border rounded px-3 py-1 hover:bg-gray-50 disabled:opacity-50"
-          style={{ marginLeft: 8 }}
-        >
-          חיילים זמינים
-        </button>
-        <button
-          onClick={() =>
-            setLockedByDay(prev => {
-              const next = { ...prev, [day]: !prev[day] };
-              return next;
-            })
-          }
-          className="border rounded px-3 py-1 hover:bg-gray-50"
-          style={{ marginLeft: 8 }}
-          aria-pressed={locked}
-          title={locked ? `Unlock ${day}` : `Lock ${day}`}
-        >
-          {locked ? "פתח" : "נעל"}
-        </button>
-      </div>
 
       {/*results && (
         <div className="space-y-2">
