@@ -18,6 +18,11 @@ import {
 
 import Modal from "../components/Modal";
 import SoldierHistoryModal from "../components/SoldierHistoryModal";
+import LockIcon from '@mui/icons-material/Lock';
+import LockOpenIcon from '@mui/icons-material/LockOpen';
+import BlockIcon from '@mui/icons-material/Block';
+import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
+import CheckIcon from '@mui/icons-material/Check';
 import { getPlannerWarnings, type PlannerWarning } from "../api"
 import { listSoldierVacations, type Vacation } from "../api";
 import { useSidebar } from "../contexts/SidebarContext";
@@ -2048,10 +2053,9 @@ async function shufflePlanner() {
                 <tr>
                   <th className="text-left p-2 border w-[220px]">משימה</th>
                   <th className="text-left p-2 border w-[260px]">חלון זמן</th>
-                  <th className="text-left p-2 border w-[40px]">שבץ</th>
-                  <th className="text-left p-2 border w-[40px]">נעל</th>
                   <th className="text-left p-2 border">תפקיד</th>
                   <th className="text-left p-2 border">חייל</th>
+                  <th className="text-left p-2 border w-[120px]">פעולות</th>
                   <th className="text-left p-2 border">התראות</th>
                 </tr>
               </thead>
@@ -2061,7 +2065,7 @@ async function shufflePlanner() {
                     {/* Mission divider (skip before the first mission) */}
                     {gIdx > 0 && (
                       <tr aria-hidden>
-                        <td colSpan={7} style={{ padding: 0 }}>
+                        <td colSpan={6} style={{ padding: 0 }}>
                           <div
                             style={{
                               height: 1,
@@ -2167,55 +2171,56 @@ async function shufflePlanner() {
                                   {isFirstRow && missionCell}
                                   {isFirstRow && timeCell}
                                   
-                                  {/* Checkbox column */}
-                                  <td className="p-2 border">
-                                    <input
-                                      type="checkbox"
-                                      checked={isExcluded}
-                                      onChange={(e) => {
-                                        setExcludedSlots(prev => {
-                                          const next = new Set(prev);
-                                          if (e.target.checked) {
-                                            next.add(slotKey);
-                                          } else {
-                                            next.delete(slotKey);
-                                          }
-                                          return next;
-                                        });
-                                      }}
-                                    />
-                                  </td>
-                                  
-                                  {/* Lock column - empty for unassigned slots */}
-                                  <td className="p-2 border"></td>
-                                  
                                   {/* Role column */}
                                   <td className="p-2 border">{reqSlot.roleName ?? ""}</td>
                                   
                                   {/* Soldier column */}
                                   <td className="p-2 border">
-                                    <div className="flex items-center gap-2">
-                                      <span className="italic text-gray-500" style={{ color: "crimson" }}>
-                                        לא משובץ
-                                      </span>
+                                    <span className="italic text-gray-500" style={{ color: "crimson" }}>
+                                      לא משובץ
+                                    </span>
+                                  </td>
 
+                                  {/* Actions column */}
+                                  <td className="p-2 border">
+                                    <div className="flex items-center gap-1">
                                       <button
                                         type="button"
-                                        className="border rounded px-2 py-1"
-                                        disabled={locked}
-                                        onClick={() =>
-                                          g.missionId &&
-                                          openChangeModalForEmptySlot(
-                                            g.missionId,
-                                            slot.startLabel,
-                                            slot.endLabel,
-                                            reqSlot.roleName,
-                                            reqSlot.roleId
-                                          )
-                                        }
+                                        onClick={() => {
+                                          setExcludedSlots(prev => {
+                                            const next = new Set(prev);
+                                            if (isExcluded) {
+                                              next.delete(slotKey);
+                                            } else {
+                                              next.add(slotKey);
+                                            }
+                                            return next;
+                                          });
+                                        }}
+                                        className={`border rounded px-2 py-1 text-sm flex items-center justify-center ${isExcluded ? 'bg-red-100 border-red-300' : 'bg-gray-100 border-gray-300'}`}
+                                        title={isExcluded ? "לא ישובץ" : "ישובץ"}
                                       >
-                                        החלף
+                                        {isExcluded ? <BlockIcon style={{ fontSize: '1rem' }} /> : <CheckIcon style={{ fontSize: '1rem' }} />}
                                       </button>
+                                      {!locked && (
+                                        <button
+                                          type="button"
+                                          className="border rounded px-2 py-1 flex items-center"
+                                          onClick={() =>
+                                            g.missionId &&
+                                            openChangeModalForEmptySlot(
+                                              g.missionId,
+                                              slot.startLabel,
+                                              slot.endLabel,
+                                              reqSlot.roleName,
+                                              reqSlot.roleId
+                                            )
+                                          }
+                                          title="החלף חייל"
+                                        >
+                                          <SwapHorizIcon style={{ fontSize: '1.2rem' }} />
+                                        </button>
+                                      )}
                                     </div>
                                   </td>
 
@@ -2403,34 +2408,36 @@ async function shufflePlanner() {
                                 <tr key={`${slot.key}-${slotIndex}`} className="border-l-4 border-r-4 border-blue-400">
                                 {slotIndex === 0 && nonEmptyMissionCell}
                                 {slotIndex === 0 && nonEmptyTimeCell}
-                                <td className="p-2 border">
-                                  <input
-                                    type="checkbox"
-                                    checked={isExcluded}
-                                    onChange={(e) => {
-                                      setExcludedSlots(prev => {
-                                        const next = new Set(prev);
-                                        if (e.target.checked) {
-                                          next.add(slotKey);
-                                        } else {
-                                          next.delete(slotKey);
-                                        }
-                                        return next;
-                                      });
-                                    }}
-                                  />
-                                </td>
-                                <td className="p-2 border">{/* Lock column - empty for unassigned slots */}</td>
                                 <td className="p-2 border">{requiredSlot.roleName ?? ""}</td>
-                                  <td className="p-2 border">
-                                    <div className="flex items-center gap-2">
-                                      <span className="italic text-gray-500" style={{ color: "crimson" }}>
-                                        לא משובץ
-                                      </span>
+                                <td className="p-2 border">
+                                  <span className="italic text-gray-500" style={{ color: "crimson" }}>
+                                    לא משובץ
+                                  </span>
+                                </td>
+                                <td className="p-2 border">
+                                  <div className="flex items-center gap-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setExcludedSlots(prev => {
+                                          const next = new Set(prev);
+                                          if (isExcluded) {
+                                            next.delete(slotKey);
+                                          } else {
+                                            next.add(slotKey);
+                                          }
+                                          return next;
+                                        });
+                                      }}
+                                      className={`border rounded px-2 py-1 text-sm flex items-center justify-center ${isExcluded ? 'bg-red-100 border-red-300' : 'bg-gray-100 border-gray-300'}`}
+                                      title={isExcluded ? "לא ישובץ" : "ישובץ"}
+                                    >
+                                      {isExcluded ? <BlockIcon style={{ fontSize: '1rem' }} /> : <CheckIcon style={{ fontSize: '1rem' }} />}
+                                    </button>
+                                    {!locked && (
                                       <button
                                         type="button"
-                                        className="border rounded px-2 py-1"
-                                        disabled={locked}
+                                        className="border rounded px-2 py-1 flex items-center"
                                         onClick={() =>
                                           g.missionId &&
                                           openChangeModalForEmptySlot(
@@ -2441,12 +2448,14 @@ async function shufflePlanner() {
                                             requiredSlot.roleId
                                           )
                                         }
+                                        title="החלף חייל"
                                       >
-                                        החלף
+                                        <SwapHorizIcon style={{ fontSize: '1.2rem' }} />
                                       </button>
-                                    </div>
-                                  </td>
-                                  <td className="p-2 border border-r-4 border-blue-400">{/* empty */}</td>
+                                    )}
+                                  </div>
+                                </td>
+                                <td className="p-2 border border-r-4 border-blue-400">{/* empty */}</td>
                                 </tr>
                               );
                             }
@@ -2482,94 +2491,100 @@ async function shufflePlanner() {
                               <tr key={`${slot.key}-${slotIndex}`} className="border-l-4 border-r-4 border-blue-400">
                                 {slotIndex === 0 && nonEmptyMissionCell}
                                 {slotIndex === 0 && nonEmptyTimeCell}
-                                <td className="p-2 border">
-                                  <input
-                                    type="checkbox"
-                                    checked={isExcluded}
-                                    onChange={(e) => {
-                                      if (e.target.checked) {
-                                        // When checking exclusion, uncheck lock
-                                        setLockedAssignments(prev => {
-                                          const next = new Set(prev);
-                                          next.delete(r.id);
-                                          return next;
-                                        });
-                                        setExcludedSlots(prev => {
-                                          const next = new Set(prev);
-                                          next.add(slotKey);
-                                          return next;
-                                        });
-                                      } else {
-                                        setExcludedSlots(prev => {
-                                          const next = new Set(prev);
-                                          next.delete(slotKey);
-                                          return next;
-                                        });
-                                      }
-                                    }}
-                                  />
-                                </td>
-                                <td className="p-2 border">
-                                  <input
-                                    type="checkbox"
-                                    checked={lockedAssignments.has(r.id)}
-                                    onChange={(e) => {
-                                      if (e.target.checked) {
-                                        // When checking lock, uncheck exclusion
-                                        setExcludedSlots(prev => {
-                                          const next = new Set(prev);
-                                          next.delete(slotKey);
-                                          return next;
-                                        });
-                                        setLockedAssignments(prev => {
-                                          const next = new Set(prev);
-                                          next.add(r.id);
-                                          return next;
-                                        });
-                                      } else {
-                                        setLockedAssignments(prev => {
-                                          const next = new Set(prev);
-                                          next.delete(r.id);
-                                          return next;
-                                        });
-                                      }
-                                    }}
-                                  />
-                                </td>
                                 <td className="p-2 border">{r.role ?? ""}</td>
                                 <td className="border">
-                                  <div className="flex items-center gap-2">
-                                    {(() => {
-                                      if (!r.soldier_id || !r.soldier_name) {
-                                        return <span style={{ color: "crimson" }}>לא משובץ</span>;
-                                      }
-                                      const tier = restTierForRow(r);
-                                      const style =
-                                        tier === "red"
-                                          ? { color: "crimson", fontWeight: 600 }
-                                          : tier === "orange"
+                                  {(() => {
+                                    if (!r.soldier_id || !r.soldier_name) {
+                                      return <span style={{ color: "crimson" }}>לא משובץ</span>;
+                                    }
+                                    const tier = restTierForRow(r);
+                                    const style =
+                                      tier === "red"
+                                        ? { color: "crimson", fontWeight: 600 }
+                                        : tier === "orange"
                                           ? { color: "#d97706", fontWeight: 600 }
                                           : tier === "green"
-                                          ? { color: "#15803d", fontWeight: 600 }
-                                          : undefined;
-                                      return (
-                                        <button
-                                          type="button"
-                                          onClick={() => openSoldierHistory(r.soldier_id!, r.soldier_name)}
-                                          className="underline"
-                                          style={style}
-                                          title="View Mission History"
-                                        >
-                                          {r.soldier_name}
-                                        </button>
-                                      );
-                                    })()}
+                                            ? { color: "#15803d", fontWeight: 600 }
+                                            : undefined;
+                                    return (
+                                      <button
+                                        type="button"
+                                        onClick={() => openSoldierHistory(r.soldier_id!, r.soldier_name)}
+                                        className="underline"
+                                        style={style}
+                                        title="View Mission History"
+                                      >
+                                        {r.soldier_name}
+                                      </button>
+                                    );
+                                  })()}
+                                </td>
+                                <td className="p-2 border">
+                                  <div className="flex items-center gap-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        if (!isExcluded) {
+                                          // When clicking to exclude, uncheck lock
+                                          setLockedAssignments(prev => {
+                                            const next = new Set(prev);
+                                            next.delete(r.id);
+                                            return next;
+                                          });
+                                          setExcludedSlots(prev => {
+                                            const next = new Set(prev);
+                                            next.add(slotKey);
+                                            return next;
+                                          });
+                                        } else {
+                                          setExcludedSlots(prev => {
+                                            const next = new Set(prev);
+                                            next.delete(slotKey);
+                                            return next;
+                                          });
+                                        }
+                                      }}
+                                      className={`border rounded px-2 py-1 text-sm flex items-center justify-center ${isExcluded ? 'bg-red-100 border-red-300' : 'bg-gray-100 border-gray-300'}`}
+                                      title={isExcluded ? "לא ישובץ" : "ישובץ"}
+                                    >
+                                      {isExcluded ? <BlockIcon style={{ fontSize: '1rem' }} /> : <CheckIcon style={{ fontSize: '1rem' }} />}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const isCurrentlyLocked = lockedAssignments.has(r.id);
+                                        if (!isCurrentlyLocked) {
+                                          // When clicking to lock, uncheck exclusion
+                                          setExcludedSlots(prev => {
+                                            const next = new Set(prev);
+                                            next.delete(slotKey);
+                                            return next;
+                                          });
+                                          setLockedAssignments(prev => {
+                                            const next = new Set(prev);
+                                            next.add(r.id);
+                                            return next;
+                                          });
+                                        } else {
+                                          setLockedAssignments(prev => {
+                                            const next = new Set(prev);
+                                            next.delete(r.id);
+                                            return next;
+                                          });
+                                        }
+                                      }}
+                                      className={`border rounded px-2 py-1 text-sm flex items-center justify-center ${lockedAssignments.has(r.id) ? 'bg-blue-100 border-blue-300' : 'bg-gray-100 border-gray-300'}`}
+                                      title={lockedAssignments.has(r.id) ? "פתח נעילה" : "נעל"}
+                                    >
+                                      {lockedAssignments.has(r.id) ? <LockIcon style={{ fontSize: '1rem' }} /> : <LockOpenIcon style={{ fontSize: '1rem' }} />}
+                                    </button>
                                     <button
                                       type="button"
                                       onClick={() => openChangeModal(r.id, r.role)}
-                                      className="border rounded px-2 py-1"
+                                      className="border rounded px-2 py-1 flex items-center"
+                                      title="החלף חייל"
                                     >
-                                      החלף
+                                      <SwapHorizIcon style={{ fontSize: '1.2rem' }} />
                                     </button>
                                   </div>
                                 </td>
