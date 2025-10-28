@@ -468,13 +468,12 @@ async function shufflePlanner() {
       // Days: selected day and the previous two, oldest → newest
       const daysISO = [0, -1, -2].map((n) => shiftDay(day, n)).reverse();
 
-      // Labels for headers: dd/MM (no year)
+      // Labels for headers: dd/MM format - prefix with = to force text in Excel
       const dayLabel = (iso: string) => {
-        const [y, m, d] = iso.split("-").map(Number);
-        const dt = new Date(Date.UTC(y, m - 1, d));
-        const dd = String(dt.getUTCDate()).padStart(2, "0");
-        const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
-        return `${dd}/${mm}`;
+        const [, m, d] = iso.split("-").map(Number);
+        const dd = String(d).padStart(2, "0");
+        const mm = String(m).padStart(2, "0");
+        return `${dd}.${mm}`;
       };
       const dayHeaders = daysISO.map(dayLabel);
 
@@ -590,8 +589,8 @@ async function shufflePlanner() {
         return a.role.localeCompare(b.role);
       });
 
-      // CSV: columns => Mission, Role, Hours, <dd/MM>, <dd/MM>, <dd/MM>
-      const header = ["Mission", "Hours", "Role", ...dayHeaders];
+      // CSV: columns in RTL order => <dd/MM>, <dd/MM>, <dd/MM>, תפקיד, שעות, משימה
+      const header = [...dayHeaders.slice().reverse(), "תפקיד", "שעות", "משימה"];
 
       // CSV escape helper
       const esc = (v: string) => {
@@ -600,30 +599,51 @@ async function shufflePlanner() {
         return s;
       };
 
+      const reversedDaysISO = [...daysISO].reverse();
+      
+      // Build CSV rows
       const lines: string[] = [];
       lines.push(header.map(esc).join(","));
 
-      // For each slot, emit N rows where N = max assignees among the 3 days
-      for (const r of rowsArr) {
+      let lastMission = "";
+      let lastHours = "";
+      let currentSlotRowCount = 0;
+      
+      for (let idx = 0; idx < rowsArr.length; idx++) {
+        const r = rowsArr[idx];
         const counts = daysISO.map((d) => (r.byDay[d]?.length ?? 0));
         const maxRows = Math.max(...counts, 1);
 
+        // Check if this is a new slot
+        const isNewSlot = idx > 0 && (r.mission !== lastMission || r.hours !== lastHours);
+        
+        if (isNewSlot) {
+          currentSlotRowCount = 0;
+          // Add empty row before new time slot
+          lines.push("");
+        }
+        
+        lastMission = r.mission;
+        lastHours = r.hours;
+
         for (let i = 0; i < maxRows; i++) {
           const cells = [
-            r.mission,
-            r.hours,
+            ...reversedDaysISO.map((d) => (r.byDay[d]?.[i] ?? "")),
             r.role,
-            ...daysISO.map((d) => (r.byDay[d]?.[i] ?? "")),
+            currentSlotRowCount === 0 ? r.hours : "",
+            currentSlotRowCount === 0 ? r.mission : "",
           ];
           lines.push(cells.map(esc).join(","));
+          currentSlotRowCount++;
         }
       }
-
+      
       const csv = lines.join("\n");
 
-      // Download
+      // Download with UTF-8 BOM and RTL support as .csv
       const bom = "\uFEFF";
-      const blob = new Blob([bom + csv], { type: "text/csv;charset=utf-8" });
+      const rtlMark = "\u200F";
+      const blob = new Blob([bom + rtlMark + csv], { type: "text/csv;charset=utf-8" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       const first = daysISO[0];
@@ -2104,7 +2124,7 @@ async function shufflePlanner() {
 
                         // missionCell and timeCell for empty slots
                         const missionCell = (
-                          <td className="align-top p-2 border bg-gray-50" rowSpan={rowCount}>
+                          <td className="align-top p-2 border bg-gray-50 border-l-4 border-blue-400" rowSpan={rowCount}>
                             <div className="font-semibold">{g.missionName || "—"}</div>
                           </td>
                         );
@@ -2138,7 +2158,7 @@ async function shufflePlanner() {
                               const isExcluded = excludedSlots.has(slotKey);
                               
                               return (
-                                <tr key={`${slot.key}-${reqIdx}`}>
+                                <tr key={`${slot.key}-${reqIdx}`} className="border-l-4 border-r-4 border-blue-400">
                                   {isFirstRow && missionCell}
                                   {isFirstRow && timeCell}
                                   
@@ -2195,7 +2215,7 @@ async function shufflePlanner() {
                                   </td>
 
                                   {/* Warnings column for empty slot */}
-                                  <td className="p-2 border">{/* empty */}</td>
+                                  <td className="p-2 border border-r-4 border-blue-400">{/* empty */}</td>
                                 </tr>
                               );
                             })}
@@ -2332,7 +2352,7 @@ async function shufflePlanner() {
 
                       // missionCell and timeCell for non-empty slots
                       const nonEmptyMissionCell = (
-                        <td className="align-top p-2 border bg-gray-50" rowSpan={totalRowCount}>
+                        <td className="align-top p-2 border bg-gray-50 border-l-4 border-blue-400" rowSpan={totalRowCount}>
                           <div className="font-semibold">{g.missionName || "—"}</div>
                         </td>
                       );
@@ -2375,7 +2395,7 @@ async function shufflePlanner() {
                             if (!assignment) {
                               // This required slot is unassigned
                               return (
-                                <tr key={`${slot.key}-${slotIndex}`}>
+                                <tr key={`${slot.key}-${slotIndex}`} className="border-l-4 border-r-4 border-blue-400">
                                 {slotIndex === 0 && nonEmptyMissionCell}
                                 {slotIndex === 0 && nonEmptyTimeCell}
                                 <td className="p-2 border">
@@ -2421,7 +2441,7 @@ async function shufflePlanner() {
                                       </button>
                                     </div>
                                   </td>
-                                  <td className="p-2 border">{/* empty */}</td>
+                                  <td className="p-2 border border-r-4 border-blue-400">{/* empty */}</td>
                                 </tr>
                               );
                             }
@@ -2454,7 +2474,7 @@ async function shufflePlanner() {
                             const pillItems = [...basePills, ...restrictedPill];
 
                             return (
-                              <tr key={`${slot.key}-${slotIndex}`}>
+                              <tr key={`${slot.key}-${slotIndex}`} className="border-l-4 border-r-4 border-blue-400">
                                 {slotIndex === 0 && nonEmptyMissionCell}
                                 {slotIndex === 0 && nonEmptyTimeCell}
                                 <td className="p-2 border">
@@ -2548,7 +2568,7 @@ async function shufflePlanner() {
                                     </button>
                                   </div>
                                 </td>
-                                <td className="p-2 border">
+                                <td className="p-2 border border-r-4 border-blue-400">
                                   <WarningsCell items={pillItems} />
                                 </td>
                               </tr>
