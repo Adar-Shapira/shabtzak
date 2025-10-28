@@ -339,7 +339,7 @@ export default function ManpowerCalendarPage() {
   }
 
   return (
-    <div style={{ maxWidth: 1200, margin: "24px auto", padding: 16 }}>
+    <div style={{ maxWidth: 1200, margin: "24px auto", padding: 0 }}>
       <div style={{ padding: "8px 16px", textAlign: "center", fontSize: 18, fontWeight: 600, marginBottom: 16 }}>
         {monthNames[currentMonth.getMonth()]} {currentMonth.getFullYear()}
       </div>

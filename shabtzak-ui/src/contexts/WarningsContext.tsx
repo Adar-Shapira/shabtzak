@@ -8,6 +8,8 @@ export interface Warning {
   mission_id: number;
   start_at: string;
   end_at: string;
+  start_local?: string;
+  end_local?: string;
   details: string | null;
   level?: string;
   assignment_id?: number | null;

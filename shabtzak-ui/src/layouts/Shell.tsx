@@ -44,31 +44,48 @@ function WarningsPanelSlot({ isCollapsed, onToggle }: { isCollapsed: boolean; on
   
   const formatTime = (iso: string) => {
     try {
-      const date = new Date(iso);
-      return date.toLocaleString('he-IL', { 
-        year: 'numeric', 
-        month: '2-digit', 
-        day: '2-digit', 
-        hour: '2-digit', 
-        minute: '2-digit' 
-      });
+      // Extract date and time from ISO string directly without timezone conversion
+      // Format: "2025-01-19T14:30:00" -> "19/01/2025 14:30"
+      const match = iso.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):\d{2}/);
+      if (match) {
+        const [, year, month, day, hour, minute] = match;
+        return `${day}/${month}/${year} ${hour}:${minute}`;
+      }
+      return iso;
     } catch {
       return iso;
     }
   };
   
+  // Determine the highest warning level
+  const hasRed = warnings.some(w => w.level === "RED");
+  const hasOrange = warnings.some(w => w.level === "ORANGE");
+  const dotColor = hasRed ? "crimson" : hasOrange ? "#d97706" : null;
+  
   return (
     <>
       <div className={`warnings-panel-container ${isCollapsed ? 'collapsed' : ''}`}>
-        <button className="warnings-toggle" onClick={onToggle}>
-          {isCollapsed ? '→' : '←'}
+        <button className="warnings-toggle" onClick={onToggle} style={{ position: 'relative' }}>
+          !
+          {dotColor && <span style={{
+            position: 'absolute',
+            top: 4,
+            right: 4,
+            width: 8,
+            height: 8,
+            borderRadius: '50%',
+            backgroundColor: dotColor
+          }} />}
         </button>
         <div className="warnings-panel">
           {warnings.length > 0 && (
             <>
               <h3 style={{ marginBottom: 8, fontSize: 14, fontWeight: 600 }}>התראות</h3>
               <div className="warnings-list">
-                {warnings.map((w, i) => {
+                {[...warnings].sort((a, b) => {
+                  const levelOrder = { RED: 0, ORANGE: 1, GRAY: 2, undefined: 3 };
+                  return (levelOrder[a.level as keyof typeof levelOrder] ?? 3) - (levelOrder[b.level as keyof typeof levelOrder] ?? 3);
+                }).map((w, i) => {
                   const color = w.level === "RED" ? "crimson" : w.level === "ORANGE" ? "#d97706" : "#374151";
                   return (
                     <div 

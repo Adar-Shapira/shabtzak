@@ -155,11 +155,13 @@ html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #0b0f
   border-bottom: 1px solid var(--border);
   color: var(--fg);
   cursor: pointer;
-  font-size: 16px;
+  font-size: 20px;
+  font-weight: bold;
   display: flex;
   align-items: center;
   justify-content: center;
   transition: background 0.2s;
+  position: relative;
 }
 
 .warnings-toggle:hover {
