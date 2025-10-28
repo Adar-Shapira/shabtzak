@@ -17,6 +17,7 @@ export default function NavBar() {
           <NavLink to="/missions" className={linkClass}>משימות</NavLink>
           <NavLink to="/soldiers" className={linkClass}>חיילים</NavLink>
           <NavLink to="/planner" className={linkClass}>שיבוץ</NavLink>
+          <NavLink to="/manpower" className={linkClass}>סד"כ</NavLink>
           {/*<NavLink to="/assignments" className={linkClass}>Assignments</NavLink>*/}
           {/*<NavLink to="/vacations" className={linkClass}>Vacations</NavLink>*/}
         </nav>

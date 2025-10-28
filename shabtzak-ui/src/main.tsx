@@ -1,13 +1,13 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { createBrowserRouter, RouterProvider } from "react-router-dom";
+import { createBrowserRouter, RouterProvider, Navigate } from "react-router-dom";
 import Shell from "./layouts/Shell";
-import App from "./App";
 //import RolesPage from "./pages/Roles";
 import MissionsPage from "./pages/Missions";
 import SoldiersPage from "./pages/Soldiers";
 import PlannerPage from "./pages/Planner";
 import AssignmentsPage from "./pages/Assignments";
+import ManpowerCalendarPage from "./pages/ManpowerCalendar";
 //import DepartmentsPage from "./pages/Departments";
 //import VacationsPage from "./pages/Vacations";
 import "./index.css";
@@ -16,13 +16,14 @@ const router = createBrowserRouter([
   {
     element: <Shell />,
     children: [
-      { index: true, element: <App /> },            // Home
+      { index: true, element: <Navigate to="/soldiers" replace /> },
       //{ path: "roles", element: <RolesPage /> },
       //{ path: "departments", element: <DepartmentsPage /> },
       { path: "missions", element: <MissionsPage /> },
       { path: "soldiers", element: <SoldiersPage /> },
       { path: "planner", element: <PlannerPage /> },
       { path: "assignments", element: <AssignmentsPage /> },
+      { path: "manpower", element: <ManpowerCalendarPage /> },
       //{ path: "vacations", element: <VacationsPage /> },
     ],
   },

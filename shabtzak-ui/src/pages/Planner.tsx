@@ -2216,10 +2216,10 @@ function formatWarningDetails(w: PlannerWarning): string {
             <table className="min-w-[760px] w-full text-sm">
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="text-left p-2 border w-[40px]">רשום</th>
-                  <th className="text-left p-2 border w-[40px]">נעל</th>
                   <th className="text-left p-2 border w-[220px]">משימה</th>
                   <th className="text-left p-2 border w-[260px]">חלון זמן</th>
+                  <th className="text-left p-2 border w-[40px]">שבץ</th>
+                  <th className="text-left p-2 border w-[40px]">נעל</th>
                   <th className="text-left p-2 border">תפקיד</th>
                   <th className="text-left p-2 border">חייל</th>
                   <th className="text-left p-2 border">התראות</th>
