@@ -51,6 +51,8 @@ export default function ManpowerCalendarPage() {
 
   // Search state for the available soldiers modal
   const [searchQuery, setSearchQuery] = useState<string>("");
+  const [filterRole, setFilterRole] = useState<string>("");
+  const [filterDepartment, setFilterDepartment] = useState<string>("");
 
   const loadData = async () => {
     setLoading(true);
@@ -200,6 +202,8 @@ export default function ManpowerCalendarPage() {
   const openAvailableModal = (dayISO: string) => {
     setSelectedDate(dayISO);
     setSearchQuery(""); // Reset search when opening modal
+    setFilterRole(""); // Reset role filter
+    setFilterDepartment(""); // Reset department filter
     
     // Calculate available soldiers for this day
     const available: Array<{ soldier: Soldier; leavingToday: boolean; returningToday: boolean }> = [];
@@ -422,47 +426,101 @@ export default function ManpowerCalendarPage() {
         maxWidth={720}
       >
         <div style={{ display: "grid", gap: 16 }}>
-          {/* Search Bar */}
-          <input
-            type="text"
-            placeholder="חפש חייל..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            style={{
-              padding: "10px 12px",
-              borderRadius: 8,
-              border: "1px solid #1f2937",
-              backgroundColor: "rgba(255,255,255,0.03)",
-              color: "#e5e7eb",
-              fontSize: 14,
-            }}
-          />
+          {/* Search Bar and Filters */}
+          <div style={{ display: "grid", gap: 8 }}>
+            <input
+              type="text"
+              placeholder="חפש חייל..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              style={{
+                padding: "10px 12px",
+                borderRadius: 8,
+                border: "1px solid #1f2937",
+                backgroundColor: "rgba(255,255,255,0.03)",
+                color: "#e5e7eb",
+                fontSize: 14,
+              }}
+            />
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              <select
+                value={filterDepartment}
+                onChange={(e) => setFilterDepartment(e.target.value)}
+                style={{
+                  padding: "10px 12px",
+                  borderRadius: 8,
+                  border: "1px solid #1f2937",
+                  backgroundColor: "rgba(255,255,255,0.03)",
+                  color: "#e5e7eb",
+                  fontSize: 14,
+                }}
+              >
+                <option value="">כל המחלקות</option>
+                {Array.from(new Set(availableSoldiers
+                  .map(({ soldier }) => soldier.department_name)
+                  .filter((d): d is string => typeof d === 'string' && d.length > 0)
+                )).map(dept => (
+                  <option key={dept} value={dept}>{dept}</option>
+                ))}
+              </select>
+              <select
+                value={filterRole}
+                onChange={(e) => setFilterRole(e.target.value)}
+                style={{
+                  padding: "10px 12px",
+                  borderRadius: 8,
+                  border: "1px solid #1f2937",
+                  backgroundColor: "rgba(255,255,255,0.03)",
+                  color: "#e5e7eb",
+                  fontSize: 14,
+                }}
+              >
+                <option value="">כל התפקידים</option>
+                {Array.from(new Set(availableSoldiers.flatMap(({ soldier }) => 
+                  soldier.roles?.map(r => r.name) || []
+                ))).map(role => (
+                  <option key={role} value={role}>{role}</option>
+                ))}
+              </select>
+            </div>
+          </div>
 
-          {/* Available Soldiers Section */}
-          <div>
-              <h3 style={{ marginBottom: 12, fontSize: 18, fontWeight: 600, color: "#e5e7eb" }}>זמינים ({availableSoldiers.filter(({ soldier }) => 
-              !searchQuery || 
-              soldier.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-              soldier.department_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-              soldier.roles?.some(r => r.name.toLowerCase().includes(searchQuery.toLowerCase()))
-            ).length})</h3>
-            {availableSoldiers.length === 0 ? (
-              <div style={{ opacity: 0.7, padding: 8 }}>אין חיילים זמינים בתאריך זה</div>
-            ) : availableSoldiers.filter(({ soldier }) => 
-                !searchQuery || 
-                soldier.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                soldier.department_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                soldier.roles?.some(r => r.name.toLowerCase().includes(searchQuery.toLowerCase()))
-              ).length === 0 ? (
-              <div style={{ opacity: 0.7, padding: 8 }}>לא נמצאו תוצאות לחיפוש "{searchQuery}"</div>
-            ) : (
-              <div style={{ display: "grid", gap: 4, maxHeight: 300, overflowY: "auto" }}>
-                {availableSoldiers.filter(({ soldier }) => 
-                !searchQuery || 
-                soldier.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                soldier.department_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                soldier.roles?.some(r => r.name.toLowerCase().includes(searchQuery.toLowerCase()))
-              ).map(({ soldier, leavingToday, returningToday }) => (
+          {/* Soldiers Sections - Side by Side */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+            {/* Available Soldiers Section */}
+            <div>
+                <h3 style={{ marginBottom: 12, fontSize: 18, fontWeight: 600, color: "#e5e7eb" }}>זמינים ({availableSoldiers.filter(({ soldier }) => {
+                const matchesSearch = !searchQuery || 
+                  soldier.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                  soldier.department_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                  soldier.roles?.some(r => r.name.toLowerCase().includes(searchQuery.toLowerCase()));
+                const matchesRole = !filterRole || soldier.roles?.some(r => r.name === filterRole);
+                const matchesDept = !filterDepartment || soldier.department_name === filterDepartment;
+                return matchesSearch && matchesRole && matchesDept;
+              }).length})</h3>
+              {availableSoldiers.length === 0 ? (
+                <div style={{ opacity: 0.7, padding: 8 }}>אין חיילים זמינים בתאריך זה</div>
+              ) : availableSoldiers.filter(({ soldier }) => {
+                const matchesSearch = !searchQuery || 
+                  soldier.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                  soldier.department_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                  soldier.roles?.some(r => r.name.toLowerCase().includes(searchQuery.toLowerCase()));
+                const matchesRole = !filterRole || soldier.roles?.some(r => r.name === filterRole);
+                const matchesDept = !filterDepartment || soldier.department_name === filterDepartment;
+                return matchesSearch && matchesRole && matchesDept;
+              }).length === 0 ? (
+                <div style={{ opacity: 0.7, padding: 8 }}>לא נמצאו תוצאות</div>
+              ) : (
+                <div style={{ display: "grid", gap: 4, maxHeight: 300, overflowY: "auto" }}>
+                  {availableSoldiers.filter(({ soldier }) => {
+                const matchesSearch = !searchQuery || 
+                  soldier.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                  soldier.department_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                  soldier.roles?.some(r => r.name.toLowerCase().includes(searchQuery.toLowerCase()));
+                const matchesRole = !filterRole || soldier.roles?.some(r => r.name === filterRole);
+                const matchesDept = !filterDepartment || soldier.department_name === filterDepartment;
+                return matchesSearch && matchesRole && matchesDept;
+              }).map(({ soldier, leavingToday, returningToday }) => (
                   <div key={soldier.id} style={{ padding: 10, border: "1px solid #1f2937", borderRadius: 8, backgroundColor: "rgba(255,255,255,0.02)" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       <div 
@@ -506,62 +564,76 @@ export default function ManpowerCalendarPage() {
                 ))}
               </div>
             )}
-          </div>
+            </div>
 
-          {/* On Vacation Soldiers Section */}
-          {onVacationSoldiers.filter(({ soldier }) => 
-            !searchQuery || 
-            soldier.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-            soldier.department_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-            soldier.roles?.some(r => r.name.toLowerCase().includes(searchQuery.toLowerCase()))
-          ).length > 0 && (
+            {/* On Vacation Soldiers Section */}
             <div>
-              <h3 style={{ marginBottom: 12, fontSize: 18, fontWeight: 600, color: "#9ca3af" }}>בחופשה ({onVacationSoldiers.filter(({ soldier }) => 
-                !searchQuery || 
-                soldier.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                soldier.department_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                soldier.roles?.some(r => r.name.toLowerCase().includes(searchQuery.toLowerCase()))
-              ).length})</h3>
-              <div style={{ display: "grid", gap: 4, maxHeight: 200, overflowY: "auto" }}>
-                {onVacationSoldiers.filter(({ soldier }) => 
-                  !searchQuery || 
+              <h3 style={{ marginBottom: 12, fontSize: 18, fontWeight: 600, color: "#9ca3af" }}>בחופשה ({onVacationSoldiers.filter(({ soldier }) => {
+                const matchesSearch = !searchQuery || 
                   soldier.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
                   soldier.department_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                  soldier.roles?.some(r => r.name.toLowerCase().includes(searchQuery.toLowerCase()))
-                ).map(({ soldier, returnDate }) => (
-                  <div key={soldier.id} style={{ padding: 10, border: "1px solid #1f2937", borderRadius: 8, backgroundColor: "rgba(255,255,255,0.01)", opacity: 0.8 }}>
-                    <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-                      <span 
-                        onClick={() => openVacations(soldier)}
-                        style={{ fontWeight: 500, cursor: "pointer", color: "#60a5fa" }}
-                      >
-                        {soldier.name}
-                      </span>
-                      {returnDate && (
-                        <span style={{ 
-                          fontSize: 11, 
-                          color: "#9ca3af", 
-                          backgroundColor: "rgba(255,255,255,0.05)", 
-                          padding: "2px 6px", 
-                          borderRadius: 4 
-                        }}>
-                          חוזר ב-{returnDate}
+                  soldier.roles?.some(r => r.name.toLowerCase().includes(searchQuery.toLowerCase()));
+                const matchesRole = !filterRole || soldier.roles?.some(r => r.name === filterRole);
+                const matchesDept = !filterDepartment || soldier.department_name === filterDepartment;
+                return matchesSearch && matchesRole && matchesDept;
+              }).length})</h3>
+              {onVacationSoldiers.length === 0 ? (
+                <div style={{ opacity: 0.7, padding: 8 }}>אין חיילים בחופשה בתאריך זה</div>
+              ) : onVacationSoldiers.filter(({ soldier }) => {
+                const matchesSearch = !searchQuery || 
+                  soldier.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                  soldier.department_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                  soldier.roles?.some(r => r.name.toLowerCase().includes(searchQuery.toLowerCase()));
+                const matchesRole = !filterRole || soldier.roles?.some(r => r.name === filterRole);
+                const matchesDept = !filterDepartment || soldier.department_name === filterDepartment;
+                return matchesSearch && matchesRole && matchesDept;
+              }).length === 0 ? (
+                <div style={{ opacity: 0.7, padding: 8 }}>לא נמצאו תוצאות</div>
+              ) : (
+                <div style={{ display: "grid", gap: 4, maxHeight: 300, overflowY: "auto" }}>
+                  {onVacationSoldiers.filter(({ soldier }) => {
+                    const matchesSearch = !searchQuery || 
+                      soldier.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                      soldier.department_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                      soldier.roles?.some(r => r.name.toLowerCase().includes(searchQuery.toLowerCase()));
+                    const matchesRole = !filterRole || soldier.roles?.some(r => r.name === filterRole);
+                    const matchesDept = !filterDepartment || soldier.department_name === filterDepartment;
+                    return matchesSearch && matchesRole && matchesDept;
+                  }).map(({ soldier, returnDate }) => (
+                    <div key={soldier.id} style={{ padding: 10, border: "1px solid #1f2937", borderRadius: 8, backgroundColor: "rgba(255,255,255,0.01)", opacity: 0.8 }}>
+                      <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                        <span 
+                          onClick={() => openVacations(soldier)}
+                          style={{ fontWeight: 500, cursor: "pointer", color: "#60a5fa" }}
+                        >
+                          {soldier.name}
                         </span>
+                        {returnDate && (
+                          <span style={{ 
+                            fontSize: 11, 
+                            color: "#9ca3af", 
+                            backgroundColor: "rgba(255,255,255,0.05)", 
+                            padding: "2px 6px", 
+                            borderRadius: 4 
+                          }}>
+                            חוזר ב-{returnDate}
+                          </span>
+                        )}
+                      </div>
+                      {soldier.department_name && (
+                        <div style={{ fontSize: 12, opacity: 0.7, marginTop: 2 }}>מחלקה: {soldier.department_name}</div>
+                      )}
+                      {soldier.roles && soldier.roles.length > 0 && (
+                        <div style={{ fontSize: 12, opacity: 0.6, marginTop: 2 }}>
+                          {soldier.roles.map(r => r.name).join(", ")}
+                        </div>
                       )}
                     </div>
-                    {soldier.department_name && (
-                      <div style={{ fontSize: 12, opacity: 0.7, marginTop: 2 }}>מחלקה: {soldier.department_name}</div>
-                    )}
-                    {soldier.roles && soldier.roles.length > 0 && (
-                      <div style={{ fontSize: 12, opacity: 0.6, marginTop: 2 }}>
-                        {soldier.roles.map(r => r.name).join(", ")}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
-          )}
+          </div>
         </div>
       </Modal>
 
