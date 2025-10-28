@@ -630,17 +630,10 @@ export default function SoldiersPage() {
             </Modal>
 
             {/* Roles Modal */}
-            <Modal open={rolesDlg.isOpen} onClose={cancelRoleDialog} title="תפקיד" maxWidth={640}>
+            <Modal open={rolesDlg.isOpen} onClose={cancelRoleDialog} title="נהל תפקידים" maxWidth={640}>
                 <div style={{ display: "grid", gap: 12 }}>
                     {/* Toolbar */}
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <div style={{ fontSize: 12, opacity: 0.75 }}>
-                        נהל תפקידים
-                    </div>
-                    <div style={{ display: "flex", gap: 8 }}>
-                        <button onClick={startAddRole}>הוסף תפקיד</button>
-                        <button onClick={cancelRoleDialog}>סגור</button>
-                    </div>
                     </div>
 
                     {/* When adding or editing, show the small form at top */}
@@ -662,7 +655,7 @@ export default function SoldiersPage() {
                                 setRoleName("");
                                 }}
                             >
-                                Cancel
+                                בטל
                             </button>
                             </div>
                         </form>
@@ -719,10 +712,6 @@ export default function SoldiersPage() {
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                         <div style={{ fontSize: 12, opacity: 0.75 }}>
                             הוסף טווח תאריכים בהם החייל בחופשה
-                        </div>
-                        <div style={{ display: "flex", gap: 8 }}>
-                        <button onClick={startAddVacation}>הוסף</button>
-                        <button onClick={closeVacations}>סגור</button>
                         </div>
                     </div>
 

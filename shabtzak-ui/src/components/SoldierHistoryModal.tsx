@@ -17,19 +17,16 @@ type Props = {
   onClose: () => void
 }
 
-// "YYYY-MM-DD HH:MM" formatter from ISO-ish strings we get from the API
+// "HH:MM - DD/MM" formatter from ISO-ish strings we get from the API
 function toYMDHM(isoLike: string | undefined | null): string {
   if (!isoLike) return ""
-  // Prefer strings that already include local offset (start_local/end_local)
-  // Examples: "2025-10-22T14:00:00+03:00" -> "2025-10-22 14:00"
-  //           "2025-10-22T14:00:00Z"      -> "2025-10-22 14:00"
-  //           "2025-10-22 14:00"          -> stays as-is
   const s = String(isoLike)
-  // If already "YYYY-MM-DD HH:MM"
-  if (s.length >= 16 && s[4] === "-" && (s[10] === " " || s[10] === "T")) {
-    const datePart = s.slice(0, 10)
-    const timePart = s.slice(11, 16)
-    return `${datePart} ${timePart}`
+  // Parse "YYYY-MM-DD HH:MM" or "YYYY-MM-DDTHH:MM:ss..." format
+  const match = s.match(/(\d{4})-(\d{2})-(\d{2})[\sT](\d{2}):(\d{2})/)
+  if (match) {
+    const [, , month, day, hours, minutes] = match
+    // Return "HH:MM - DD/MM"
+    return `${hours}:${minutes} - ${day}/${month}`
   }
   return s
 }
@@ -144,11 +141,17 @@ export default function SoldierHistoryModal({ soldierId, soldierName, isOpen, on
                 } else {
                 // Fallback to raw history times if no roster match found
                 // This keeps the UI populated even in rare mismatch cases
-                startLabel = dayISO && it.start_time ? `${dayISO} ${String(it.start_time).slice(0,5)}` : ""
-                endLabel = dayISO && it.end_time ? `${dayISO} ${String(it.end_time).slice(0,5)}` : ""
+                if (dayISO && it.start_time) {
+                  const [, month, day] = dayISO.split("-")
+                  startLabel = `${String(it.start_time).slice(0,5)} - ${day}/${month}`
+                }
+                if (dayISO && it.end_time) {
+                  const [, month, day] = dayISO.split("-")
+                  endLabel = `${String(it.end_time).slice(0,5)} - ${day}/${month}`
+                }
                 }
 
-                const timeSlot = startLabel && endLabel ? `${startLabel} → ${endLabel}` : ""
+                const timeSlot = startLabel && endLabel ? `${endLabel} → ${startLabel}` : ""
 
                 return (
                 <tr key={`${it.mission_id}-${it.slot_date}-${it.start_time}`}>

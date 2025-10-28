@@ -1529,7 +1529,11 @@ async function shufflePlanner() {
   }>;
 
   function labelFor(dayISO: string, hhmmss: string) {
-    return `${dayISO} ${hhmmss.slice(0,5)}`;
+    // Convert YYYY-MM-DD to DD/MM
+    const [, month, day] = dayISO.split("-");
+    const formattedDate = `${day}/${month}`;
+    // Return "HH:MM - DD/MM"
+    return `${hhmmss.slice(0,5)} - ${formattedDate}`;
   }
 
   function isOvernight(startHHMMSS: string, endHHMMSS: string) {
@@ -2141,7 +2145,7 @@ async function shufflePlanner() {
                         const timeCell = (
                           <td className="align-top p-2 border bg-gray-50" rowSpan={rowCount}>
                             <div className="text-xs text-gray-600">
-                              {slot.startLabel} → {slot.endLabel}
+                              {slot.endLabel} → {slot.startLabel}
                             </div>
                           </td>
                         );
@@ -2184,24 +2188,6 @@ async function shufflePlanner() {
                                   {/* Actions column */}
                                   <td className="p-2 border">
                                     <div className="flex items-center gap-1">
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setExcludedSlots(prev => {
-                                            const next = new Set(prev);
-                                            if (isExcluded) {
-                                              next.delete(slotKey);
-                                            } else {
-                                              next.add(slotKey);
-                                            }
-                                            return next;
-                                          });
-                                        }}
-                                        className={`border rounded px-2 py-1 text-sm flex items-center justify-center ${isExcluded ? 'bg-red-100 border-red-300' : 'bg-gray-100 border-gray-300'}`}
-                                        title={isExcluded ? "לא ישובץ" : "ישובץ"}
-                                      >
-                                        {isExcluded ? <BlockIcon style={{ fontSize: '1rem' }} /> : <CheckIcon style={{ fontSize: '1rem' }} />}
-                                      </button>
                                       {!locked && (
                                         <button
                                           type="button"
@@ -2221,6 +2207,24 @@ async function shufflePlanner() {
                                           <SwapHorizIcon style={{ fontSize: '1.2rem' }} />
                                         </button>
                                       )}
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setExcludedSlots(prev => {
+                                            const next = new Set(prev);
+                                            if (isExcluded) {
+                                              next.delete(slotKey);
+                                            } else {
+                                              next.add(slotKey);
+                                            }
+                                            return next;
+                                          });
+                                        }}
+                                        className={`border rounded px-2 py-1 text-sm flex items-center justify-center ${isExcluded ? 'bg-red-100 border-red-300' : 'bg-gray-100 border-gray-300'}`}
+                                        title={isExcluded ? "לא ישובץ" : "ישובץ"}
+                                      >
+                                        {isExcluded ? <BlockIcon style={{ fontSize: '1rem' }} /> : <CheckIcon style={{ fontSize: '1rem' }} />}
+                                      </button>
                                     </div>
                                   </td>
 
@@ -2370,7 +2374,7 @@ async function shufflePlanner() {
                       const nonEmptyTimeCell = (
                         <td className="align-top p-2 border bg-gray-50" rowSpan={totalRowCount}>
                           <div className="text-xs text-gray-600">
-                            {slot.startLabel} → {slot.endLabel}
+                            {slot.endLabel} → {slot.startLabel}
                           </div>
                         </td>
                       );
@@ -2416,24 +2420,6 @@ async function shufflePlanner() {
                                 </td>
                                 <td className="p-2 border">
                                   <div className="flex items-center gap-1">
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setExcludedSlots(prev => {
-                                          const next = new Set(prev);
-                                          if (isExcluded) {
-                                            next.delete(slotKey);
-                                          } else {
-                                            next.add(slotKey);
-                                          }
-                                          return next;
-                                        });
-                                      }}
-                                      className={`border rounded px-2 py-1 text-sm flex items-center justify-center ${isExcluded ? 'bg-red-100 border-red-300' : 'bg-gray-100 border-gray-300'}`}
-                                      title={isExcluded ? "לא ישובץ" : "ישובץ"}
-                                    >
-                                      {isExcluded ? <BlockIcon style={{ fontSize: '1rem' }} /> : <CheckIcon style={{ fontSize: '1rem' }} />}
-                                    </button>
                                     {!locked && (
                                       <button
                                         type="button"
@@ -2453,6 +2439,24 @@ async function shufflePlanner() {
                                         <SwapHorizIcon style={{ fontSize: '1.2rem' }} />
                                       </button>
                                     )}
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setExcludedSlots(prev => {
+                                          const next = new Set(prev);
+                                          if (isExcluded) {
+                                            next.delete(slotKey);
+                                          } else {
+                                            next.add(slotKey);
+                                          }
+                                          return next;
+                                        });
+                                      }}
+                                      className={`border rounded px-2 py-1 text-sm flex items-center justify-center ${isExcluded ? 'bg-red-100 border-red-300' : 'bg-gray-100 border-gray-300'}`}
+                                      title={isExcluded ? "לא ישובץ" : "ישובץ"}
+                                    >
+                                      {isExcluded ? <BlockIcon style={{ fontSize: '1rem' }} /> : <CheckIcon style={{ fontSize: '1rem' }} />}
+                                    </button>
                                   </div>
                                 </td>
                                 <td className="p-2 border border-r-4 border-blue-400">{/* empty */}</td>
@@ -2521,6 +2525,14 @@ async function shufflePlanner() {
                                 </td>
                                 <td className="p-2 border">
                                   <div className="flex items-center gap-1">
+                                  <button
+                                      type="button"
+                                      onClick={() => openChangeModal(r.id, r.role)}
+                                      className="border rounded px-2 py-1 flex items-center"
+                                      title="החלף חייל"
+                                    >
+                                      <SwapHorizIcon style={{ fontSize: '1.2rem' }} />
+                                    </button>
                                     <button
                                       type="button"
                                       onClick={() => {
@@ -2577,14 +2589,6 @@ async function shufflePlanner() {
                                       title={lockedAssignments.has(r.id) ? "פתח נעילה" : "נעל"}
                                     >
                                       {lockedAssignments.has(r.id) ? <LockIcon style={{ fontSize: '1rem' }} /> : <LockOpenIcon style={{ fontSize: '1rem' }} />}
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => openChangeModal(r.id, r.role)}
-                                      className="border rounded px-2 py-1 flex items-center"
-                                      title="החלף חייל"
-                                    >
-                                      <SwapHorizIcon style={{ fontSize: '1.2rem' }} />
                                     </button>
                                   </div>
                                 </td>
