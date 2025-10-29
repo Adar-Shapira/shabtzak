@@ -439,14 +439,17 @@ export default function ManpowerCalendarPage() {
                   backgroundColor: "rgba(255,255,255,0.03)",
                   color: "#e5e7eb",
                   fontSize: 14,
+                  cursor: "pointer",
+                  direction: "rtl",
+                  textAlign: "right",
                 }}
               >
-                <option value="">כל המחלקות</option>
+                <option value="" style={{ backgroundColor: "rgba(17, 24, 39, 0.95)", color: "#e5e7eb" }}>כל המחלקות</option>
                 {Array.from(new Set(availableSoldiers
                   .map(({ soldier }) => soldier.department_name)
                   .filter((d): d is string => typeof d === 'string' && d.length > 0)
                 )).map(dept => (
-                  <option key={dept} value={dept}>{dept}</option>
+                  <option key={dept} value={dept} style={{ backgroundColor: "rgba(17, 24, 39, 0.95)", color: "#e5e7eb" }}>{dept}</option>
                 ))}
               </select>
               <select
@@ -459,13 +462,16 @@ export default function ManpowerCalendarPage() {
                   backgroundColor: "rgba(255,255,255,0.03)",
                   color: "#e5e7eb",
                   fontSize: 14,
+                  cursor: "pointer",
+                  direction: "rtl",
+                  textAlign: "right",
                 }}
               >
-                <option value="">כל התפקידים</option>
+                <option value="" style={{ backgroundColor: "rgba(17, 24, 39, 0.95)", color: "#e5e7eb" }}>כל התפקידים</option>
                 {Array.from(new Set(availableSoldiers.flatMap(({ soldier }) => 
                   soldier.roles?.map(r => r.name) || []
                 ))).map(role => (
-                  <option key={role} value={role}>{role}</option>
+                  <option key={role} value={role} style={{ backgroundColor: "rgba(17, 24, 39, 0.95)", color: "#e5e7eb" }}>{role}</option>
                 ))}
               </select>
             </div>

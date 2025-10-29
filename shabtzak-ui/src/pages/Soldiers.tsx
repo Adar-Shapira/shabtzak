@@ -1,5 +1,6 @@
 // shabtzak-ui/src/pages/Soldiers.tsx
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
+import { createPortal } from "react-dom";
 import type React from "react";
 import { api } from "../api";
 import Modal from "../components/Modal";
@@ -47,6 +48,202 @@ function byName(a: Soldier, b: Soldier) {
   return a.name.localeCompare(b.name);
 }
 
+function RolePill({ name }: { name: string }) {
+  return (
+    <span
+      style={{
+        color: "#10b981", // green-500
+        border: "1px solid currentColor",
+        borderRadius: 4,
+        padding: "1px 6px",
+        fontSize: "0.85em",
+        fontWeight: 600,
+        display: "inline-block",
+        lineHeight: 1.3,
+      }}
+    >
+      {name}
+    </span>
+  );
+}
+
+function MultiSelectDropdown<T extends string | number>({
+  options,
+  selected,
+  onChange,
+  placeholder,
+  getLabel,
+}: {
+  options: T[];
+  selected: T[];
+  onChange: (selected: T[]) => void;
+  placeholder: string;
+  getLabel: (option: T) => string;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [dropdownPosition, setDropdownPosition] = useState({ top: 0, left: 0, width: 0 });
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (
+        dropdownRef.current &&
+        !dropdownRef.current.contains(target) &&
+        buttonRef.current &&
+        !buttonRef.current.contains(target)
+      ) {
+        setIsOpen(false);
+      }
+    };
+
+    if (isOpen) {
+      document.addEventListener("mousedown", handleClickOutside);
+    }
+
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [isOpen]);
+
+  useEffect(() => {
+    const updatePosition = () => {
+      if (isOpen && buttonRef.current) {
+        const rect = buttonRef.current.getBoundingClientRect();
+        setDropdownPosition({
+          top: rect.bottom + 4,
+          left: rect.left,
+          width: rect.width,
+        });
+      }
+    };
+
+    if (isOpen) {
+      updatePosition();
+      window.addEventListener("scroll", updatePosition, true);
+      window.addEventListener("resize", updatePosition);
+    }
+
+    return () => {
+      window.removeEventListener("scroll", updatePosition, true);
+      window.removeEventListener("resize", updatePosition);
+    };
+  }, [isOpen]);
+
+  const toggleOption = (option: T) => {
+    if (selected.includes(option)) {
+      onChange(selected.filter(item => item !== option));
+    } else {
+      onChange([...selected, option]);
+    }
+  };
+
+  const selectedLabels = selected.map(getLabel);
+
+  const dropdownContent = isOpen ? (
+    <div
+      ref={dropdownRef}
+      style={{
+        position: "fixed",
+        top: `${dropdownPosition.top}px`,
+        left: `${dropdownPosition.left}px`,
+        width: `${dropdownPosition.width}px`,
+        backgroundColor: "rgba(17, 24, 39, 0.95)",
+        border: "1px solid #1f2937",
+        borderRadius: 8,
+        maxHeight: 200,
+        overflowY: "auto",
+        zIndex: 10000,
+        boxShadow: "0 4px 6px rgba(0, 0, 0, 0.3)",
+        direction: "rtl",
+      }}
+    >
+      {options.map((option) => {
+        const isSelected = selected.includes(option);
+        return (
+          <label
+            key={String(option)}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              flexDirection: "row-reverse",
+              justifyContent: "space-between",
+              padding: "8px 12px",
+              cursor: "pointer",
+              backgroundColor: isSelected ? "rgba(16, 185, 129, 0.1)" : "transparent",
+              transition: "background-color 0.15s",
+            }}
+            onMouseEnter={(e) => {
+              if (!isSelected) {
+                e.currentTarget.style.backgroundColor = "rgba(255,255,255,0.05)";
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (!isSelected) {
+                e.currentTarget.style.backgroundColor = "transparent";
+              }
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={isSelected}
+              onChange={() => toggleOption(option)}
+              style={{
+                cursor: "pointer",
+              }}
+            />
+            <span style={{ color: "#e5e7eb", fontSize: 14, flex: 1, direction: "rtl", textAlign: "right" }}>
+              {getLabel(option)}
+            </span>
+          </label>
+        );
+      })}
+      {options.length === 0 && (
+        <div style={{ padding: "12px", color: "#9ca3af", fontSize: 14, textAlign: "center" }}>
+          אין אפשרויות
+        </div>
+      )}
+    </div>
+  ) : null;
+
+  return (
+    <div style={{ position: "relative", width: "100%" }}>
+      <button
+        ref={buttonRef}
+        type="button"
+        onClick={() => setIsOpen(!isOpen)}
+        style={{
+          width: "100%",
+          padding: "10px 12px",
+          borderRadius: 8,
+          border: "1px solid #1f2937",
+          backgroundColor: "rgba(255,255,255,0.03)",
+          color: "#e5e7eb",
+          fontSize: 14,
+          textAlign: "right",
+          direction: "rtl",
+          cursor: "pointer",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+        }}
+      >
+        <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", direction: "rtl", textAlign: "right" }}>
+          {selected.length === 0
+            ? placeholder
+            : selected.length === 1
+            ? selectedLabels[0]
+            : `${selected.length} נבחרו`}
+        </span>
+        <span style={{ marginRight: 8, fontSize: 12 }}>{isOpen ? "▲" : "▼"}</span>
+      </button>
+
+      {dropdownContent && createPortal(dropdownContent, document.body)}
+    </div>
+  );
+}
+
 export default function SoldiersPage() {
     const { setActions } = useSidebar();
     
@@ -59,6 +256,8 @@ export default function SoldiersPage() {
     const [soldiers, setSoldiers] = useState<Soldier[]>([]);
     const [loading, setLoading] = useState(false);
     const [err, setErr] = useState<string | null>(null);
+    const [searchQuery, setSearchQuery] = useState("");
+    const [filterRole, setFilterRole] = useState<string>("");
 
     const addDlg = useDisclosure(false);
 
@@ -464,6 +663,46 @@ export default function SoldiersPage() {
         }
     }, [vacDlg.isOpen, vacSoldier?.id]);
 
+    // Filter soldiers based on search query and role filter
+    const filteredSoldiers = useMemo(() => {
+        let result = soldiers;
+
+        // Filter by name search
+        if (searchQuery.trim()) {
+            const query = searchQuery.toLowerCase().trim();
+            result = result.filter(s => s.name.toLowerCase().includes(query));
+        }
+
+        // Filter by role
+        if (filterRole) {
+            result = result.filter(s => 
+                s.roles?.some(r => r.name === filterRole)
+            );
+        }
+
+        return result;
+    }, [soldiers, searchQuery, filterRole]);
+
+    // Sorted roles for dropdown
+    const sortedRoles = useMemo(() => {
+        return [...roles].sort((a, b) => a.name.localeCompare(b.name));
+    }, [roles]);
+
+    // Default department (lowest ID)
+    const defaultDepartmentId = useMemo(() => {
+        if (departments.length === 0) return null;
+        return departments.reduce((lowest, current) => 
+            current.id < lowest.id ? current : lowest
+        ).id;
+    }, [departments]);
+
+    // Set default department when modal opens
+    useEffect(() => {
+        if (addDlg.isOpen && !newDeptId && defaultDepartmentId) {
+            setNewDeptId(defaultDepartmentId);
+        }
+    }, [addDlg.isOpen, defaultDepartmentId, newDeptId]);
+
     // Build a department → soldiers map that also includes empty departments
     const { groupsByDeptId, unassigned } = useMemo(() => {
         const byId = new Map<number, Soldier[]>();
@@ -471,7 +710,7 @@ export default function SoldiersPage() {
         for (const d of departments) byId.set(d.id, []);
 
         const none: Soldier[] = [];
-        for (const s of soldiers) {
+        for (const s of filteredSoldiers) {
             if (s.department_id != null && byId.has(s.department_id)) {
             byId.get(s.department_id)!.push(s);
             } else {
@@ -479,12 +718,12 @@ export default function SoldiersPage() {
             none.push(s);
             }
         }
-        // sort each department’s soldiers
+        // sort each department's soldiers
         for (const [, arr] of byId) arr.sort(byName);
         none.sort(byName);
 
         return { groupsByDeptId: byId, unassigned: none };
-        }, [departments, soldiers]);
+        }, [departments, filteredSoldiers]);
 
         // Sorted departments A→Z (drive UI from departments, not soldiers)
         const sortedDepartments = useMemo(
@@ -503,17 +742,18 @@ export default function SoldiersPage() {
         e.preventDefault();
         setErr(null);
         try {
+            const deptId = newDeptId || defaultDepartmentId;
             await api.post("/soldiers", {
             name: newName.trim(),
             role_ids: newRoleIds,
-            department_id: newDeptId === "" ? null : Number(newDeptId),   // ← null instead of 0
+            department_id: deptId ? Number(deptId) : null,
             restrictions: newRestrictions,
             });
 
             // resets:
             setNewName("");
             setNewRoleIds([]);
-            setNewDeptId("");
+            setNewDeptId(defaultDepartmentId ?? "");
             setNewRestrictions([]);
             addDlg.close();
             await loadAll();
@@ -565,50 +805,90 @@ export default function SoldiersPage() {
         <div style={{ maxWidth: 1200, margin: "24px auto", padding: 16, fontFamily: "sans-serif" }}>
 
 
-            <Modal open={addDlg.isOpen} onClose={addDlg.close} title="Add Soldier" maxWidth={720}>
+            <Modal open={addDlg.isOpen} onClose={addDlg.close} title="הוסף חייל" maxWidth={720}>
                 <form
                     onSubmit={createSoldier}
-                    style={{ display: "grid", gridTemplateColumns: "1.6fr 1.2fr 1.2fr 1.2fr auto", gap: 10 }}
+                    style={{ display: "grid", gap: 16 }}
                 >
-                    <input value={newName} onChange={(e)=>setNewName(e.target.value)} placeholder="Full name" required />
-
-                    {/* Roles multi */}
+                    {/* Name */}
                     <div>
-                    <div style={{ fontSize: 12, opacity:.8, marginBottom: 4 }}>תפקיד</div>
-                    <select
-                        multiple
-                        size={5}
-                        value={newRoleIds.map(String)}
-                        onChange={(e) => {
-                        const selected = Array.from(e.target.selectedOptions).map(o => Number(o.value));
-                        setNewRoleIds(selected);
-                        }}
-                        style={{ width: "100%" }}
-                    >
-                        {roles.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
-                    </select>
+                        <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 6 }}>שם מלא</div>
+                        <input 
+                            value={newName} 
+                            onChange={(e)=>setNewName(e.target.value)} 
+                            placeholder="שם מלא" 
+                            required 
+                            style={{
+                                width: "100%",
+                                padding: "10px 12px",
+                                borderRadius: 8,
+                                border: "1px solid #1f2937",
+                                backgroundColor: "rgba(255,255,255,0.03)",
+                                color: "#e5e7eb",
+                                fontSize: 14,
+                            }}
+                        />
                     </div>
 
-                    {/* Department */}
-                    <div>
-                    <div style={{ fontSize: 12, opacity:.8, marginBottom: 4 }}>מחלקה</div>
-                    <select value={newDeptId} onChange={(e)=>setNewDeptId(e.target.value ? Number(e.target.value) : "")} style={{ width: "100%" }}>
-                        <option value="">(-)</option>
-                        {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-                    </select>
+                    {/* Roles, Department, and Restrictions Row */}
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+                        {/* Roles multi */}
+                        <div>
+                            <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 6 }}>תפקיד</div>
+                            <MultiSelectDropdown
+                                options={sortedRoles.map(r => r.id)}
+                                selected={newRoleIds}
+                                onChange={setNewRoleIds}
+                                placeholder="בחר תפקידים"
+                                getLabel={(id) => {
+                                    const role = sortedRoles.find(r => r.id === id);
+                                    return role?.name || String(id);
+                                }}
+                            />
+                        </div>
+
+                        {/* Department */}
+                        <div>
+                            <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 6 }}>מחלקה</div>
+                            <select 
+                                value={(newDeptId || defaultDepartmentId) ?? ""} 
+                                onChange={(e)=>setNewDeptId(Number(e.target.value))} 
+                                required
+                                disabled={departments.length === 0}
+                                style={{ 
+                                    width: "100%",
+                                    padding: "10px 12px",
+                                    borderRadius: 8,
+                                    border: "1px solid #1f2937",
+                                    backgroundColor: "rgba(255,255,255,0.03)",
+                                    color: "#e5e7eb",
+                                    fontSize: 14,
+                                    cursor: "pointer",
+                                    direction: "rtl",
+                                    textAlign: "right",
+                                }}
+                            >
+                                {departments.map(d => <option key={d.id} value={d.id} style={{ backgroundColor: "rgba(17, 24, 39, 0.95)", color: "#e5e7eb" }}>{d.name}</option>)}
+                            </select>
+                        </div>
+
+                        {/* Restrictions */}
+                        <div>
+                            <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 6 }}>הגבלות</div>
+                            <MultiSelectDropdown
+                                options={restrictionOptions}
+                                selected={newRestrictions}
+                                onChange={setNewRestrictions}
+                                placeholder="בחר הגבלות"
+                                getLabel={(option) => option}
+                            />
+                        </div>
                     </div>
 
-                    {/* Restrictions */}
-                    <div>
-                    <div style={{ fontSize: 12, opacity:.8, marginBottom: 4 }}>הגבלות</div>
-                    <select multiple size={5} value={newRestrictions} onChange={(e)=>onMultiChangeStrings(e, setNewRestrictions)} style={{ width: "100%" }}>
-                        {restrictionOptions.map(n => <option key={n} value={n}>{n}</option>)}
-                    </select>
-                    </div>
-
-                    <div style={{ alignSelf: "end", display: "flex", gap: 8 }}>
-                    <button type="button" onClick={addDlg.close}>בטל</button>
-                    <button type="submit">הוסף</button>
+                    {/* Buttons */}
+                    <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 8 }}>
+                        <button type="button" onClick={addDlg.close}>בטל</button>
+                        <button type="submit">הוסף</button>
                     </div>
                 </form>
             </Modal>
@@ -673,7 +953,6 @@ export default function SoldiersPage() {
                     <tbody>
                         {roles.map((r) => (
                         <tr key={r.id} style={{ borderTop: "1px solid #eee" }}>
-                            <td>{r.id}</td>
                             <td>{r.name}</td>
                             <td>
                             <button onClick={() => startEditRole(r.id, r.name)}>ערוך</button>
@@ -842,6 +1121,49 @@ export default function SoldiersPage() {
             {err && <div style={{ color: "crimson", marginBottom: 12 }}>{err}</div>}
             {loading && <div>בטעינה...</div>}
 
+            {/* Search Bar and Filters */}
+            {!loading && (
+                <div style={{ display: "flex", gap: 8, marginBottom: 20, flexWrap: "wrap" }}>
+                    <input
+                        type="text"
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        placeholder="חפש חייל..."
+                        style={{
+                            flex: "1 1 300px",
+                            minWidth: 200,
+                            padding: "10px 12px",
+                            borderRadius: 8,
+                            border: "1px solid #1f2937",
+                            backgroundColor: "rgba(255,255,255,0.03)",
+                            color: "#e5e7eb",
+                            fontSize: 14,
+                        }}
+                    />
+                    <select
+                        value={filterRole}
+                        onChange={(e) => setFilterRole(e.target.value)}
+                        style={{
+                            flex: "0 1 250px",
+                            minWidth: 200,
+                            padding: "10px 12px",
+                            borderRadius: 8,
+                            border: "1px solid #1f2937",
+                            backgroundColor: "rgba(255,255,255,0.03)",
+                            color: "#e5e7eb",
+                            fontSize: 14,
+                        }}
+                    >
+                        <option value="">כל התפקידים</option>
+                        {Array.from(new Set(soldiers.flatMap(s => 
+                            s.roles?.map(r => r.name) || []
+                        ))).sort().map(role => (
+                            <option key={role} value={role}>{role}</option>
+                        ))}
+                    </select>
+                </div>
+            )}
+
             {/* Grouped by Department (collapsible) */}
             {!loading && (
                 <>
@@ -937,7 +1259,11 @@ export default function SoldiersPage() {
                                                 ))}
                                             </select>
                                             ) : s.roles?.length ? (
-                                            s.roles.map((r) => r.name).join(", ")
+                                            <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                                                {s.roles.map((r) => (
+                                                    <RolePill key={r.id} name={r.name} />
+                                                ))}
+                                            </div>
                                             ) : (
                                             <span style={{ opacity: 0.6 }}>(אין)</span>
                                             )}
