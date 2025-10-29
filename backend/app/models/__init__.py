@@ -13,6 +13,7 @@ from .vacation import Vacation
 from .department import Department
 from .mission_requirement import MissionRequirement
 from .soldier_mission_restriction import SoldierMissionRestriction
+from .saved_plan import SavedPlan
 
 
 __all__ = [
@@ -24,4 +25,5 @@ __all__ = [
     "Assignment",
     "Vacation",
     "Department",
+    "SavedPlan",
 ]

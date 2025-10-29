@@ -12,6 +12,8 @@ export interface SidebarActions {
   onExportFile?: () => void;
   onAvailableSoldiers?: () => void;
   onLockToggle?: () => void;
+  onSavePlan?: () => void;
+  onLoadSavedPlans?: () => void;
   currentDay?: string;
   onDayChange?: (day: string) => void;
   currentMonth?: string;

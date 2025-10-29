@@ -14,6 +14,14 @@ import {
   type MissionSlot,
   getMissionRequirements,
   type MissionRequirement,
+  savePlan,
+  listSavedPlans,
+  getSavedPlan,
+  loadSavedPlan,
+  deleteSavedPlan,
+  type SavedPlan,
+  type SavedPlanDetail,
+  type SavedPlanData,
 } from "../api";
 
 import Modal from "../components/Modal";
@@ -23,6 +31,11 @@ import LockOpenIcon from '@mui/icons-material/LockOpen';
 import BlockIcon from '@mui/icons-material/Block';
 import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
 import CheckIcon from '@mui/icons-material/Check';
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import CloudDownloadIcon from '@mui/icons-material/CloudDownload';
+import DeleteIcon from '@mui/icons-material/Delete';
+import CloseIcon from '@mui/icons-material/Close';
+import VisibilityIcon from '@mui/icons-material/Visibility';
 import { getPlannerWarnings, type PlannerWarning } from "../api"
 import { listSoldierVacations, type Vacation } from "../api";
 import { useSidebar } from "../contexts/SidebarContext";
@@ -298,6 +311,17 @@ export default function Planner() {
   const [confirmFillOpen, setConfirmFillOpen] = useState(false);
   const [confirmShuffleOpen, setConfirmShuffleOpen] = useState(false);
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+
+  // Saved Plans modal states
+  const [savePlanOpen, setSavePlanOpen] = useState(false);
+  const [savePlanName, setSavePlanName] = useState("");
+  const [savePlanLoading, setSavePlanLoading] = useState(false);
+  const [savedPlansListOpen, setSavedPlansListOpen] = useState(false);
+  const [savedPlans, setSavedPlans] = useState<SavedPlan[]>([]);
+  const [savedPlansLoading, setSavedPlansLoading] = useState(false);
+  const [viewPlanOpen, setViewPlanOpen] = useState(false);
+  const [viewingPlan, setViewingPlan] = useState<SavedPlanDetail | null>(null);
+  const [viewPlanLoading, setViewPlanLoading] = useState(false);
 
   const [pendingEmptySlot, setPendingEmptySlot] = useState<null | {
     missionId: number;
@@ -701,6 +725,101 @@ async function shufflePlanner() {
       setRows([]);
     } finally {
       setListBusy(false);
+    }
+  }
+
+  // Saved Plans functions
+  async function handleSavePlan() {
+    if (!savePlanName.trim()) {
+      alert("אנא הזן שם לתכנית");
+      return;
+    }
+    setSavePlanLoading(true);
+    try {
+      const planData: SavedPlanData = {
+        assignments: rows,
+        excluded_slots: Array.from(excludedSlots),
+        locked_assignments: Array.from(lockedAssignments),
+      };
+      await savePlan(savePlanName.trim(), day, planData);
+      setSavePlanOpen(false);
+      setSavePlanName("");
+      alert("התכנית נשמרה בהצלחה");
+    } catch (e: any) {
+      alert(humanError(e, "Failed to save plan"));
+    } finally {
+      setSavePlanLoading(false);
+    }
+  }
+
+  async function handleLoadSavedPlansList() {
+    setSavedPlansListOpen(true);
+    setSavedPlansLoading(true);
+    try {
+      const plans = await listSavedPlans(day);
+      setSavedPlans(plans);
+    } catch (e: any) {
+      alert(humanError(e, "Failed to load saved plans"));
+    } finally {
+      setSavedPlansLoading(false);
+    }
+  }
+
+  async function handleViewPlan(planId: number) {
+    setViewPlanLoading(true);
+    try {
+      const plan = await getSavedPlan(planId);
+      setViewingPlan(plan);
+      setViewPlanOpen(true);
+      setSavedPlansListOpen(false);
+    } catch (e: any) {
+      alert(humanError(e, "Failed to load plan"));
+    } finally {
+      setViewPlanLoading(false);
+    }
+  }
+
+  async function handleLoadPlan(planId: number) {
+    const locked = !!lockedByDay[day];
+    if (locked) {
+      alert("לא ניתן לטעון תכנית - התכנית נעולה");
+      return;
+    }
+    if (!confirm("האם אתה בטוח שברצונך לטעון תכנית זו? התכנית הנוכחית תוחלף.")) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await loadSavedPlan(planId, day);
+      // Reload assignments to show the loaded plan
+      await loadAllAssignments();
+      await loadWarnings(day);
+      await loadDayRosterForWarnings(day);
+      // Restore excluded slots and locked assignments from the saved plan
+      const plan = await getSavedPlan(planId);
+      setExcludedSlots(new Set(plan.plan_data.excluded_slots));
+      setLockedAssignments(new Set(plan.plan_data.locked_assignments));
+      setSavedPlansListOpen(false);
+      alert("התכנית נטענה בהצלחה");
+    } catch (e: any) {
+      alert(humanError(e, "Failed to load plan"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDeleteSavedPlan(planId: number, e: React.MouseEvent) {
+    e.stopPropagation();
+    if (!confirm("האם אתה בטוח שברצונך למחוק תכנית זו?")) {
+      return;
+    }
+    try {
+      await deleteSavedPlan(planId);
+      // Refresh the list
+      const plans = await listSavedPlans(day);
+      setSavedPlans(plans);
+    } catch (e: any) {
+      alert(humanError(e, "Failed to delete plan"));
     }
   }
 
@@ -1761,6 +1880,8 @@ async function shufflePlanner() {
       onLockToggle: () => {
         setLockedByDay(prev => ({ ...prev, [day]: !prev[day] }));
       },
+      onSavePlan: () => setSavePlanOpen(true),
+      onLoadSavedPlans: () => handleLoadSavedPlansList(),
       isLocked: locked,
       lockedText: locked ? "פתח" : "נעל",
     });
@@ -2701,6 +2822,323 @@ async function shufflePlanner() {
       >
         <div style={{ color: '#e5e7eb' }}>
           האם אתה בטוח שברצונך למחוק את כל ההקצאות של היום? פעולה זו אינה ניתנת לביטול.
+        </div>
+      </Modal>
+
+      {/* Save Plan Modal */}
+      <Modal
+        open={savePlanOpen}
+        onClose={() => {
+          setSavePlanOpen(false);
+          setSavePlanName("");
+        }}
+        title="שמור תכנית"
+        footer={
+          <>
+            <button
+              className="btn"
+              onClick={handleSavePlan}
+              disabled={savePlanLoading || !savePlanName.trim()}
+              style={{ backgroundColor: '#10b981', color: '#fff' }}
+            >
+              שמור
+            </button>
+            <button
+              className="btn"
+              onClick={() => {
+                setSavePlanOpen(false);
+                setSavePlanName("");
+              }}
+              style={{ backgroundColor: '#6b7280' }}
+            >
+              ביטול
+            </button>
+          </>
+        }
+      >
+        <div style={{ color: '#e5e7eb' }}>
+          <label style={{ display: 'block', marginBottom: 8 }}>
+            שם התכנית:
+          </label>
+          <input
+            type="text"
+            value={savePlanName}
+            onChange={(e) => setSavePlanName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && savePlanName.trim()) {
+                handleSavePlan();
+              }
+            }}
+            placeholder="הזן שם לתכנית"
+            style={{
+              width: '100%',
+              padding: '8px',
+              backgroundColor: '#374151',
+              color: '#e5e7eb',
+              border: '1px solid #4b5563',
+              borderRadius: '4px',
+            }}
+            autoFocus
+          />
+        </div>
+      </Modal>
+
+      {/* Saved Plans List Modal */}
+      <Modal
+        open={savedPlansListOpen}
+        onClose={() => setSavedPlansListOpen(false)}
+        title="תכניות שמורות"
+        maxWidth={800}
+      >
+        <div style={{ color: '#e5e7eb' }}>
+          {savedPlansLoading ? (
+            <div>טוען...</div>
+          ) : savedPlans.length === 0 ? (
+            <div>אין תכניות שמורות עבור {day}</div>
+          ) : (
+            <div style={{ maxHeight: '60vh', overflowY: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ borderBottom: '1px solid #374151' }}>
+                    <th style={{ padding: '12px', textAlign: 'right' }}>שם</th>
+                    <th style={{ padding: '12px', textAlign: 'right' }}>תאריך</th>
+                    <th style={{ padding: '12px', textAlign: 'right' }}>נוצר</th>
+                    <th style={{ padding: '12px', textAlign: 'center' }}>פעולות</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {savedPlans.map((plan) => (
+                    <tr
+                      key={plan.id}
+                      style={{ borderBottom: '1px solid #374151', cursor: 'pointer' }}
+                      onClick={() => handleViewPlan(plan.id)}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.backgroundColor = '#374151';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.backgroundColor = 'transparent';
+                      }}
+                    >
+                      <td style={{ padding: '12px' }}>{plan.name}</td>
+                      <td style={{ padding: '12px' }}>{plan.day}</td>
+                      <td style={{ padding: '12px' }}>
+                        {new Date(plan.created_at).toLocaleDateString('he-IL')}
+                      </td>
+                      <td style={{ padding: '12px', textAlign: 'center' }}>
+                        <button
+                          className="btn"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleViewPlan(plan.id);
+                          }}
+                          title="צפה"
+                          style={{ marginRight: 4, padding: '4px 8px' }}
+                        >
+                          <VisibilityIcon style={{ fontSize: 18 }} />
+                        </button>
+                        <button
+                          className="btn"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleLoadPlan(plan.id);
+                          }}
+                          disabled={!!lockedByDay[day]}
+                          title={lockedByDay[day] ? "לא ניתן לטעון - התכנית נעולה" : "טען"}
+                          style={{ marginRight: 4, padding: '4px 8px' }}
+                        >
+                          <CloudDownloadIcon style={{ fontSize: 18 }} />
+                        </button>
+                        <button
+                          className="btn"
+                          onClick={(e) => handleDeleteSavedPlan(plan.id, e)}
+                          title="מחק"
+                          style={{ padding: '4px 8px' }}
+                        >
+                          <DeleteIcon style={{ fontSize: 18 }} />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </Modal>
+
+      {/* View Plan Modal */}
+      <Modal
+        open={viewPlanOpen}
+        onClose={() => {
+          setViewPlanOpen(false);
+          setViewingPlan(null);
+        }}
+        title={viewingPlan ? `צפייה בתכנית: ${viewingPlan.name}` : "צפייה בתכנית"}
+        maxWidth={1000}
+      >
+        <div style={{ color: '#e5e7eb' }}>
+          {viewPlanLoading ? (
+            <div>טוען...</div>
+          ) : !viewingPlan ? (
+            <div>אין נתונים להצגה</div>
+          ) : (
+            <div>
+              <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+                <div>
+                  <strong>תאריך:</strong> {viewingPlan.day} |{' '}
+                  <strong>נוצר:</strong> {new Date(viewingPlan.created_at).toLocaleString('he-IL')}
+                </div>
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  <button
+                    className="btn"
+                    onClick={() => {
+                      setViewPlanOpen(false);
+                      setViewingPlan(null);
+                      setSavedPlansListOpen(true);
+                    }}
+                    title="חזור לרשימה"
+                    style={{ padding: '6px 12px' }}
+                  >
+                    <ArrowBackIcon style={{ fontSize: 20 }} />
+                  </button>
+                  <button
+                    className="btn"
+                    onClick={() => {
+                      setViewPlanOpen(false);
+                      handleLoadPlan(viewingPlan.id);
+                    }}
+                    disabled={!!lockedByDay[day]}
+                    title={lockedByDay[day] ? "לא ניתן לטעון - התכנית נעולה" : "טען תכנית"}
+                    style={{ padding: '6px 12px' }}
+                  >
+                    <CloudDownloadIcon style={{ fontSize: 20 }} />
+                  </button>
+                  <button
+                    className="btn"
+                    onClick={async () => {
+                      if (confirm("האם אתה בטוח שברצונך למחוק תכנית זו?")) {
+                        try {
+                          await deleteSavedPlan(viewingPlan.id);
+                          setViewPlanOpen(false);
+                          setViewingPlan(null);
+                          // Refresh the saved plans list if it was open
+                          if (savedPlansListOpen) {
+                            const plans = await listSavedPlans(day);
+                            setSavedPlans(plans);
+                          }
+                          alert("התכנית נמחקה בהצלחה");
+                        } catch (e: any) {
+                          alert(humanError(e, "Failed to delete plan"));
+                        }
+                      }
+                    }}
+                    title="מחק תכנית"
+                    style={{ padding: '6px 12px' }}
+                  >
+                    <DeleteIcon style={{ fontSize: 20 }} />
+                  </button>
+                  <button
+                    className="btn"
+                    onClick={() => {
+                      setViewPlanOpen(false);
+                      setViewingPlan(null);
+                    }}
+                    title="סגור"
+                    style={{ padding: '6px 12px' }}
+                  >
+                    <CloseIcon style={{ fontSize: 20 }} />
+                  </button>
+                </div>
+              </div>
+              <div style={{ maxHeight: '60vh', overflowY: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '14px' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid #374151', position: 'sticky', top: 0, backgroundColor: '#1f2937' }}>
+                      <th style={{ padding: '8px', textAlign: 'right' }}>משימה</th>
+                      <th style={{ padding: '8px', textAlign: 'right' }}>התחלה</th>
+                      <th style={{ padding: '8px', textAlign: 'right' }}>סיום</th>
+                      <th style={{ padding: '8px', textAlign: 'right' }}>תפקיד</th>
+                      <th style={{ padding: '8px', textAlign: 'right' }}>חייל</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(() => {
+                      // Group assignments by mission and time slot
+                      const grouped = new Map<string, typeof viewingPlan.plan_data.assignments>();
+                      for (const assignment of viewingPlan.plan_data.assignments) {
+                        const startMs = assignment.start_local ? new Date(assignment.start_local).getTime() : 0;
+                        const endMs = assignment.end_local ? new Date(assignment.end_local).getTime() : 0;
+                        const missionName = assignment.mission?.name || '';
+                        const key = slotKey(missionName, startMs, endMs);
+                        if (!grouped.has(key)) {
+                          grouped.set(key, []);
+                        }
+                        grouped.get(key)!.push(assignment);
+                      }
+
+                      // Sort groups: first by mission name, then by start time
+                      const sortedGroups = Array.from(grouped.entries()).sort((a, b) => {
+                        const [aKey] = a;
+                        const [bKey] = b;
+                        const [, aStartMs] = aKey.split('__').map(Number);
+                        const [, bStartMs] = bKey.split('__').map(Number);
+                        const aMission = aKey.split('__')[0];
+                        const bMission = bKey.split('__')[0];
+                        if (aMission !== bMission) {
+                          return aMission.localeCompare(bMission);
+                        }
+                        return aStartMs - bStartMs;
+                      });
+
+                      const rows: React.ReactNode[] = [];
+                      sortedGroups.forEach(([key, assignments], groupIdx) => {
+                        // Add divider before each group except the first
+                        if (groupIdx > 0) {
+                          rows.push(
+                            <tr key={`divider-${key}`} aria-hidden>
+                              <td colSpan={5} style={{ padding: 0 }}>
+                                <div
+                                  style={{
+                                    height: 1,
+                                    width: "100%",
+                                    backgroundColor: "#9ca3af",
+                                    opacity: 0.7,
+                                  }}
+                                />
+                              </td>
+                            </tr>
+                          );
+                        }
+
+                        // Add assignment rows for this group
+                        // Show mission name and hours only in the first row of each group
+                        assignments.forEach((assignment, idx) => {
+                          const isFirstInGroup = idx === 0;
+                          rows.push(
+                            <tr key={assignment.id} style={{ borderBottom: '1px solid #374151' }}>
+                              <td style={{ padding: '8px' }}>
+                                {isFirstInGroup ? (assignment.mission?.name || '—') : ''}
+                              </td>
+                              <td style={{ padding: '8px' }}>
+                                {isFirstInGroup && assignment.start_local ? new Date(assignment.start_local).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' }) : ''}
+                              </td>
+                              <td style={{ padding: '8px' }}>
+                                {isFirstInGroup && assignment.end_local ? new Date(assignment.end_local).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' }) : ''}
+                              </td>
+                              <td style={{ padding: '8px' }}>{assignment.role || ''}</td>
+                              <td style={{ padding: '8px' }}>{assignment.soldier_name || '—'}</td>
+                            </tr>
+                          );
+                        });
+                      });
+
+                      return rows;
+                    })()}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       </Modal>
 

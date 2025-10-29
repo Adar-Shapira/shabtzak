@@ -233,3 +233,66 @@ export async function unassignAssignment(payload: { assignment_id: number }): Pr
   const { data } = await api.post("/plan/unassign_assignment", payload);
   return data;
 }
+
+// --- Saved Plans ----------------------------------------------------------
+
+export type SavedPlanData = {
+  assignments: Array<{
+    id: number;
+    mission: { id: number | null; name: string | null } | null;
+    role: string | null;
+    role_id: number | null;
+    soldier_id: number | null;
+    soldier_name: string;
+    start_at: string;
+    end_at: string;
+    start_local: string;
+    end_local: string;
+    start_epoch_ms: number;
+    end_epoch_ms: number;
+  }>;
+  excluded_slots: string[];
+  locked_assignments: number[];
+};
+
+export type SavedPlan = {
+  id: number;
+  name: string;
+  day: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type SavedPlanDetail = SavedPlan & {
+  plan_data: SavedPlanData;
+};
+
+export async function savePlan(name: string, day: string, planData: SavedPlanData): Promise<SavedPlan> {
+  const { data } = await api.post<SavedPlan>("/saved-plans", {
+    name,
+    day,
+    plan_data: planData,
+  });
+  return data;
+}
+
+export async function listSavedPlans(day?: string): Promise<SavedPlan[]> {
+  const params = day ? { day } : {};
+  const { data } = await api.get<SavedPlan[]>("/saved-plans", { params });
+  return data;
+}
+
+export async function getSavedPlan(planId: number): Promise<SavedPlanDetail> {
+  const { data } = await api.get<SavedPlanDetail>(`/saved-plans/${planId}`);
+  return data;
+}
+
+export async function loadSavedPlan(planId: number, day?: string): Promise<{ message: string; day: string; assignments_created: number }> {
+  const params = day ? { day } : {};
+  const { data } = await api.post(`/saved-plans/${planId}/load`, null, { params });
+  return data;
+}
+
+export async function deleteSavedPlan(planId: number): Promise<void> {
+  await api.delete(`/saved-plans/${planId}`);
+}

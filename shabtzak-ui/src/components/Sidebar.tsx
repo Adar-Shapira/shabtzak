@@ -14,6 +14,8 @@ import PeopleIcon from '@mui/icons-material/People';
 import LockIcon from '@mui/icons-material/Lock';
 import LockOpenIcon from '@mui/icons-material/LockOpen';
 import CalendarTodayIcon from '@mui/icons-material/CalendarToday';
+import SaveIcon from '@mui/icons-material/Save';
+import FolderOpenIcon from '@mui/icons-material/FolderOpen';
 
 
 export default function Sidebar() {
@@ -160,6 +162,24 @@ export default function Sidebar() {
                 title={actions?.lockedText || "נעל"}
               >
                 {actions?.isLocked ? <LockIcon style={{ fontSize: 20 }} /> : <LockOpenIcon style={{ fontSize: 20 }} />}
+              </button>
+            </li>
+            <li>
+              <button 
+                className="btn" 
+                onClick={actions?.onSavePlan}
+                title="שמור תכנית"
+              >
+                <SaveIcon style={{ fontSize: 20 }} />
+              </button>
+            </li>
+            <li>
+              <button 
+                className="btn" 
+                onClick={actions?.onLoadSavedPlans}
+                title="טען תכנית שמורה"
+              >
+                <FolderOpenIcon style={{ fontSize: 20 }} />
               </button>
             </li>
           </ul>
