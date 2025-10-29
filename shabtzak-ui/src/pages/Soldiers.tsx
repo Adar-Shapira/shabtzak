@@ -2,6 +2,10 @@
 import { useEffect, useMemo, useState, useRef } from "react";
 import { createPortal } from "react-dom";
 import type React from "react";
+import EditIcon from "@mui/icons-material/Edit";
+import DeleteIcon from "@mui/icons-material/Delete";
+import CheckIcon from "@mui/icons-material/Check";
+import CloseIcon from "@mui/icons-material/Close";
 import { api } from "../api";
 import Modal from "../components/Modal";
 import { useDisclosure } from "../hooks/useDisclosure";
@@ -53,6 +57,25 @@ function RolePill({ name }: { name: string }) {
     <span
       style={{
         color: "#10b981", // green-500
+        border: "1px solid currentColor",
+        borderRadius: 4,
+        padding: "1px 6px",
+        fontSize: "0.85em",
+        fontWeight: 600,
+        display: "inline-block",
+        lineHeight: 1.3,
+      }}
+    >
+      {name}
+    </span>
+  );
+}
+
+function RestrictionsPill({ name }: { name: string }) {
+  return (
+    <span
+      style={{
+        color: "#a855f7", // purple-500
         border: "1px solid currentColor",
         borderRadius: 4,
         padding: "1px 6px",
@@ -288,6 +311,11 @@ export default function SoldiersPage() {
 
     const [historyFor, setHistoryFor] = useState<{ id: number; name: string } | null>(null)
 
+    // Confirmation modal for deletions
+    const confirmDlg = useDisclosure(false);
+    const [confirmMessage, setConfirmMessage] = useState<string>("");
+    const [pendingDelete, setPendingDelete] = useState<{ type: "soldier" | "department" | "role" | "vacation"; id: number; name?: string; vacation?: Vacation; soldierId?: number } | null>(null);
+
 
     const openRestrictions = async (s: Soldier) => {
     setErr(null);
@@ -348,21 +376,21 @@ export default function SoldiersPage() {
     }
     };
 
-    const deleteDept = async (id: number, name: string) => {
-    if (!confirm(`Delete department "${name}"? (blocked if soldiers are assigned)`)) return;
-    setErr(null);
-    try {
-        await api.delete(`/departments/${id}`);
-        await loadAll();
-    } catch (e: any) {
-        setErr(e?.response?.data?.detail ?? "Failed to delete department");
-    }
+    const showConfirmDeleteDept = (id: number, name: string) => {
+        setConfirmMessage(`האם למחוק את המחלקה "${name}"? (חסום אם יש חיילים משובצים)`);
+        setPendingDelete({ type: "department", id, name });
+        confirmDlg.open();
+    };
+
+    const deleteDept = (id: number, name: string) => {
+        showConfirmDeleteDept(id, name);
     };
 
     // --- Roles CRUD (moved from Roles page) ---
     const rolesDlg = useDisclosure(false);
     const [roleEditId, setRoleEditId] = useState<number | null>(null);
     const [roleName, setRoleName] = useState("");
+    const [editRoleName, setEditRoleName] = useState(""); // Separate state for inline editing
     const [isRoleFormOpen, setIsRoleFormOpen] = useState(false);
 
     const startAddRole = () => {
@@ -374,14 +402,22 @@ export default function SoldiersPage() {
 
     const startEditRole = (id: number, name: string) => {
     setRoleEditId(id);
-    setRoleName(name);
-    setIsRoleFormOpen(true);
-    rolesDlg.open();
+    setEditRoleName(name); // Use separate state for inline editing
+    // Keep the add form open - editing happens inline in the row
+    if (!rolesDlg.isOpen) {
+        rolesDlg.open();
+    }
+    };
+
+    const cancelEditRole = () => {
+    setRoleEditId(null);
+    setEditRoleName("");
     };
 
     const cancelRoleDialog = () => {
     setRoleEditId(null);
     setRoleName("");
+    setEditRoleName("");
     setIsRoleFormOpen(false);
     rolesDlg.close();
     };
@@ -390,14 +426,8 @@ export default function SoldiersPage() {
     e.preventDefault();
     setErr(null);
     try {
-        if (roleEditId == null) {
         await api.post("/roles", { name: roleName.trim() });
-        } else {
-        await api.patch(`/roles/${roleEditId}`, { name: roleName.trim() });
-        }
-        // reset + refresh
-        setIsRoleFormOpen(false);
-        setRoleEditId(null);
+        // Keep form open for adding more roles, just clear the input
         setRoleName("");
         await loadAll();
     } catch (e: any) {
@@ -405,15 +435,27 @@ export default function SoldiersPage() {
     }
     };
 
-    const deleteRole = async (id: number, name: string) => {
-    if (!confirm(`Delete role "${name}"? (blocked if assigned to soldiers)`)) return;
-    setErr(null);
-    try {
-        await api.delete(`/roles/${id}`);
-        await loadAll();
-    } catch (e: any) {
-        setErr(e?.response?.data?.detail ?? "Failed to delete role");
-    }
+    const saveEditRole = async (id: number) => {
+        if (!editRoleName.trim()) return;
+        setErr(null);
+        try {
+            await api.patch(`/roles/${id}`, { name: editRoleName.trim() });
+            setRoleEditId(null);
+            setEditRoleName("");
+            await loadAll();
+        } catch (e: any) {
+            setErr(e?.response?.data?.detail ?? "Failed to save role");
+        }
+    };
+
+    const showConfirmDeleteRole = (id: number, name: string) => {
+        setConfirmMessage(`האם למחוק את התפקיד "${name}"? (חסום אם משובץ לחיילים)`);
+        setPendingDelete({ type: "role", id, name });
+        confirmDlg.open();
+    };
+
+    const deleteRole = (id: number, name: string) => {
+        showConfirmDeleteRole(id, name);
     };
 
     // --- Vacations per Soldier ---
@@ -577,14 +619,24 @@ export default function SoldiersPage() {
         }
     };
 
-    const deleteVacation = async (v: Vacation) => {
+    const showConfirmDeleteVacation = (v: Vacation) => {
         if (!vacSoldier) return;
-        if (!confirm(`Delete vacation ${v.start_date} → ${v.end_date}?`)) return;
+        const dateRange = `${v.start_date} → ${v.end_date}`;
+        setConfirmMessage(`האם למחוק את החופשה ${dateRange}?`);
+        setPendingDelete({ type: "vacation", id: v.id, vacation: v, soldierId: vacSoldier.id });
+        confirmDlg.open();
+    };
+
+    const deleteVacation = (v: Vacation) => {
+        showConfirmDeleteVacation(v);
+    };
+
+    const executeDeleteVacation = async (v: Vacation, soldierId: number) => {
         setErr(null);
         try {
             let ok = false;
             try {
-            const r = await api.delete(`/soldiers/${vacSoldier.id}/vacations/${v.id}`);
+            const r = await api.delete(`/soldiers/${soldierId}/vacations/${v.id}`);
             ok = r.status >= 200 && r.status < 300;
             } catch (e: any) {
             if (e?.response?.status === 404) {
@@ -598,7 +650,7 @@ export default function SoldiersPage() {
             if (ok) {
             setVacations(prev => prev.filter(x => x.id !== v.id));
             } else {
-            await fetchVacations(vacSoldier.id);
+            await fetchVacations(soldierId);
             }
         } catch (e: any) {
             setErr(e?.response?.data?.detail ?? "Failed to delete vacation");
@@ -606,15 +658,54 @@ export default function SoldiersPage() {
     };
 
     // DELETE
-    const removeSoldier = async (id: number) => {
-        if (!confirm("Delete this soldier? (blocked if they have assignments)")) return;
+    const showConfirmDeleteSoldier = (id: number) => {
+        const soldier = soldiers.find(s => s.id === id);
+        const soldierName = soldier ? soldier.name : "חייל זה";
+        setConfirmMessage(`האם למחוק את ${soldierName}? (חסום אם יש שיבוצים)`);
+        setPendingDelete({ type: "soldier", id, name: soldierName });
+        confirmDlg.open();
+    };
+
+    const executeDelete = async () => {
+        if (!pendingDelete) return;
+        
         setErr(null);
         try {
-            await api.delete(`/soldiers/${id}`);
-            await loadAll();
+            if (pendingDelete.type === "department") {
+                await api.delete(`/departments/${pendingDelete.id}`);
+                await loadAll();
+            } else if (pendingDelete.type === "role") {
+                await api.delete(`/roles/${pendingDelete.id}`);
+                await loadAll();
+            } else if (pendingDelete.type === "vacation") {
+                if (pendingDelete.vacation && pendingDelete.soldierId) {
+                    await executeDeleteVacation(pendingDelete.vacation, pendingDelete.soldierId);
+                }
+            } else {
+                await api.delete(`/soldiers/${pendingDelete.id}`);
+                await loadAll();
+            }
+            setPendingDelete(null);
+            confirmDlg.close();
         } catch (e: any) {
-            setErr(e?.response?.data?.detail ?? "Failed to delete soldier");
+            let errorMsg = "Failed to delete";
+            if (pendingDelete.type === "department") {
+                errorMsg = "Failed to delete department";
+            } else if (pendingDelete.type === "role") {
+                errorMsg = "Failed to delete role";
+            } else if (pendingDelete.type === "vacation") {
+                errorMsg = "Failed to delete vacation";
+            } else {
+                errorMsg = "Failed to delete soldier";
+            }
+            setErr(e?.response?.data?.detail ?? errorMsg);
+            setPendingDelete(null);
+            confirmDlg.close();
         }
+    };
+
+    const removeSoldier = (id: number) => {
+        showConfirmDeleteSoldier(id);
     };
 
     const loadAll = async () => {
@@ -786,10 +877,11 @@ export default function SoldiersPage() {
 
     const saveEdit = async (id: number) => {
         try {
+            const deptId = editDeptId || defaultDepartmentId;
             await api.patch(`/soldiers/${id}`, {
                 name: editName.trim(),
                 role_ids: editRoleIds,
-                department_id: editDeptId === "" ? null : Number(editDeptId),   // ← null instead of 0
+                department_id: deptId ? Number(deptId) : null,
                 restrictions: editRestrictions,
             });
 
@@ -916,28 +1008,33 @@ export default function SoldiersPage() {
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     </div>
 
-                    {/* When adding or editing, show the small form at top */}
+                    {/* Add role form at top */}
                     {isRoleFormOpen && (
-                        <form onSubmit={saveRole} style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: 8, alignItems: "center", padding: 8, border: "1px solid #eee", borderRadius: 8 }}>
+                        <form onSubmit={saveRole} style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8, alignItems: "center", padding: 8, border: "1px solid #eee", borderRadius: 8 }}>
                             <input
                             value={roleName}
                             onChange={(e) => setRoleName(e.target.value)}
                             placeholder="תפקיד"
                             required
+                            style={{
+                                padding: "8px 12px",
+                                borderRadius: 8,
+                                border: "1px solid #1f2937",
+                                backgroundColor: "rgba(255,255,255,0.03)",
+                                color: "#e5e7eb",
+                                fontSize: 14,
+                            }}
                             />
-                            <div style={{ display: "flex", gap: 8 }}>
-                            <button type="submit">{roleEditId == null ? "הוסף" : "שמור"}</button>
-                            <button
-                                type="button"
-                                onClick={() => {
-                                setIsRoleFormOpen(false);
-                                setRoleEditId(null);
-                                setRoleName("");
-                                }}
-                            >
-                                בטל
+                            <button type="submit" style={{
+                                padding: "8px 16px",
+                                borderRadius: 8,
+                                border: "1px solid #1f2937",
+                                backgroundColor: "rgba(255,255,255,0.03)",
+                                color: "#e5e7eb",
+                                cursor: "pointer",
+                            }}>
+                                הוסף
                             </button>
-                            </div>
                         </form>
                     )}
 
@@ -951,20 +1048,119 @@ export default function SoldiersPage() {
                         </tr>
                     </thead>
                     <tbody>
-                        {roles.map((r) => (
+                        {roles.map((r) => {
+                        const isEditing = roleEditId === r.id;
+                        return (
                         <tr key={r.id} style={{ borderTop: "1px solid #eee" }}>
-                            <td>{r.name}</td>
                             <td>
-                            <button onClick={() => startEditRole(r.id, r.name)}>ערוך</button>
-                            <button
-                                onClick={() => deleteRole(r.id, r.name)}
-                                style={{ marginLeft: 8, color: "crimson" }}
-                            >
-                                מחק
-                            </button>
+                                {isEditing ? (
+                                    <input
+                                        value={editRoleName}
+                                        onChange={(e) => setEditRoleName(e.target.value)}
+                                        onKeyDown={(e) => {
+                                            if (e.key === "Enter") {
+                                                e.preventDefault();
+                                                saveEditRole(r.id);
+                                            } else if (e.key === "Escape") {
+                                                e.preventDefault();
+                                                cancelEditRole();
+                                            }
+                                        }}
+                                        style={{
+                                            width: "100%",
+                                            padding: "6px 10px",
+                                            borderRadius: 6,
+                                            border: "1px solid #1f2937",
+                                            backgroundColor: "rgba(255,255,255,0.03)",
+                                            color: "#e5e7eb",
+                                            fontSize: 14,
+                                        }}
+                                        autoFocus
+                                    />
+                                ) : (
+                                    r.name
+                                )}
+                            </td>
+                            <td>
+                                {isEditing ? (
+                                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                                        <button 
+                                            type="button"
+                                            onClick={() => saveEditRole(r.id)}
+                                            title="שמור"
+                                            style={{ 
+                                                padding: "4px 8px",
+                                                border: "none",
+                                                background: "transparent",
+                                                cursor: "pointer",
+                                                display: "inline-flex",
+                                                alignItems: "center",
+                                                color: "#e5e7eb"
+                                            }}
+                                        >
+                                            <CheckIcon fontSize="small" />
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={cancelEditRole}
+                                            title="בטל"
+                                            style={{ 
+                                                padding: "4px 8px",
+                                                border: "none",
+                                                background: "transparent",
+                                                cursor: "pointer",
+                                                display: "inline-flex",
+                                                alignItems: "center",
+                                                color: "#e5e7eb"
+                                            }}
+                                        >
+                                            <CloseIcon fontSize="small" />
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                                        <button 
+                                            type="button"
+                                            onClick={() => startEditRole(r.id, r.name)}
+                                            title="ערוך"
+                                            style={{ 
+                                                padding: "4px 8px",
+                                                border: "none",
+                                                background: "transparent",
+                                                cursor: "pointer",
+                                                display: "inline-flex",
+                                                alignItems: "center",
+                                                color: "#e5e7eb"
+                                            }}
+                                        >
+                                            <EditIcon fontSize="small" />
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={(e) => {
+                                                e.preventDefault();
+                                                e.stopPropagation();
+                                                showConfirmDeleteRole(r.id, r.name);
+                                            }}
+                                            title="מחק"
+                                            style={{ 
+                                                padding: "4px 8px",
+                                                border: "none",
+                                                background: "transparent",
+                                                cursor: "pointer",
+                                                display: "inline-flex",
+                                                alignItems: "center",
+                                                color: "#e5e7eb"
+                                            }}
+                                        >
+                                            <DeleteIcon fontSize="small" />
+                                        </button>
+                                    </div>
+                                )}
                             </td>
                         </tr>
-                        ))}
+                        );
+                        })}
                         {roles.length === 0 && (
                         <tr>
                             <td colSpan={4} style={{ opacity: 0.7 }}>(-)</td>
@@ -995,7 +1191,7 @@ export default function SoldiersPage() {
                     </div>
 
                     {/* Add/Edit form */}
-                    <form onSubmit={saveVacation} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr auto", gap: 8, alignItems: "center" }}>
+                    <form onSubmit={saveVacation} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr auto", gap: 8, alignItems: "end" }}>
                         <div>
                         <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 4 }}>התחלה</div>
                         <input type="date" value={vacStart} onChange={(e) => setVacStart(e.target.value)} required />
@@ -1006,9 +1202,9 @@ export default function SoldiersPage() {
                         </div>
                         <div>
                         <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 4 }}>הערות</div>
-                        <input type="text" value={vacNote} onChange={(e) => setVacNote(e.target.value)} placeholder="Optional" />
+                        <input type="text" value={vacNote} onChange={(e) => setVacNote(e.target.value)} placeholder="הערות" />
                         </div>
-                        <div style={{ display: "flex", gap: 8, alignItems: "end" }}>
+                        <div style={{ display: "flex", gap: 8 }}>
                         <button type="submit">{vacEditId == null ? "הוסף" : "שמור"}</button>
                         {vacEditId != null && (
                             <button
@@ -1100,9 +1296,25 @@ export default function SoldiersPage() {
                             <td>{v.end_date}</td>
                             <td>{v.note ?? <span style={{ opacity: 0.6 }}>(אין)</span>}</td>
                             <td>
-                                <button onClick={() => startEditVacation(v)}>ערוך</button>
-                                <button onClick={() => deleteVacation(v)} style={{ marginLeft: 8, color: "crimson" }}>
-                                מחק
+                                <button
+                                    type="button"
+                                    onClick={(e) => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        deleteVacation(v);
+                                    }}
+                                    title="מחק"
+                                    style={{ 
+                                        padding: "4px 8px",
+                                        border: "none",
+                                        background: "transparent",
+                                        cursor: "pointer",
+                                        display: "inline-flex",
+                                        alignItems: "center",
+                                        color: "#e5e7eb"
+                                    }}
+                                >
+                                    <DeleteIcon fontSize="small" />
                                 </button>
                             </td>
                             </tr>
@@ -1152,13 +1364,16 @@ export default function SoldiersPage() {
                             backgroundColor: "rgba(255,255,255,0.03)",
                             color: "#e5e7eb",
                             fontSize: 14,
+                            cursor: "pointer",
+                            direction: "rtl",
+                            textAlign: "right",
                         }}
                     >
-                        <option value="">כל התפקידים</option>
+                        <option value="" style={{ backgroundColor: "rgba(17, 24, 39, 0.95)", color: "#e5e7eb" }}>כל התפקידים</option>
                         {Array.from(new Set(soldiers.flatMap(s => 
                             s.roles?.map(r => r.name) || []
                         ))).sort().map(role => (
-                            <option key={role} value={role}>{role}</option>
+                            <option key={role} value={role} style={{ backgroundColor: "rgba(17, 24, 39, 0.95)", color: "#e5e7eb" }}>{role}</option>
                         ))}
                     </select>
                 </div>
@@ -1187,17 +1402,42 @@ export default function SoldiersPage() {
                                 </div>
                                 <div
                                 onClick={(e) => e.preventDefault()} // avoid toggling <details> via buttons
-                                style={{ display: "flex", gap: 8 }}
+                                style={{ display: "flex", gap: 8, alignItems: "center" }}
                                 >
-                                <button onClick={() => startEditDept(dep.id, dep.name)} title="Rename department">
-                                    ערוך
+                                <button 
+                                    onClick={() => startEditDept(dep.id, dep.name)} 
+                                    title="שנה שם מחלקה"
+                                    style={{ 
+                                        padding: "4px 8px",
+                                        border: "none",
+                                        background: "transparent",
+                                        cursor: "pointer",
+                                        display: "inline-flex",
+                                        alignItems: "center",
+                                        color: "#e5e7eb"
+                                    }}
+                                >
+                                    <EditIcon fontSize="small" />
                                 </button>
                                 <button
-                                    onClick={() => deleteDept(dep.id, dep.name)}
-                                    style={{ color: "crimson" }}
-                                    title="Delete department"
+                                    type="button"
+                                    onClick={(e) => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        showConfirmDeleteDept(dep.id, dep.name);
+                                    }}
+                                    title="מחק מחלקה"
+                                    style={{ 
+                                        padding: "4px 8px",
+                                        border: "none",
+                                        background: "transparent",
+                                        cursor: "pointer",
+                                        display: "inline-flex",
+                                        alignItems: "center",
+                                        color: "#e5e7eb"
+                                    }}
                                 >
-                                    מחק
+                                    <DeleteIcon fontSize="small" />
                                 </button>
                                 </div>
                             </div>
@@ -1213,12 +1453,13 @@ export default function SoldiersPage() {
                                 <thead>
                                     <tr>
                                     {/*<th style={{ width: 60 }}>ID</th>*/}
-                                    <th>שם</th>
-                                    <th style={{ width: 320 }}>תפקיד</th>
-                                    <th style={{ width: 220 }}>מחלקה</th>
-                                    <th style={{ width: 260 }}>הגבלות</th>
-                                    <th style={{ width: 160 }}>חופשות</th>
-                                    <th style={{ width: 180 }}>פעולות</th>
+                                    <th style={{ minWidth: 150 }}>שם</th>
+                                    <th style={{ width: 280 }}>תפקיד</th>
+                                    <th style={{ width: 180 }}>מחלקה</th>
+                                    <th style={{ width: 240 }}>הגבלות</th>
+                                    <th style={{ width: 120 }}>חופשות</th>
+                                    <th style={{ width: 120 }}>היסטוריה</th>
+                                    <th style={{ width: 160 }}>פעולות</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -1229,12 +1470,12 @@ export default function SoldiersPage() {
                                         {/*<td>{s.id}</td>*/}
 
                                         {/* name */}
-                                        <td>
+                                        <td style={{ minWidth: 150 }}>
                                             {isEditing ? (
                                             <input
                                                 value={editName}
                                                 onChange={(e) => setEditName(e.target.value)}
-                                                style={{ width: "100%" }}
+                                                style={{ width: "100%", minWidth: 120, padding: "4px 8px" }}
                                             />
                                             ) : (
                                             s.name
@@ -1244,20 +1485,16 @@ export default function SoldiersPage() {
                                         {/* roles */}
                                         <td>
                                             {isEditing ? (
-                                            <select
-                                                multiple
-                                                size={4}
-                                                value={editRoleIds.map(String)}
-                                                onChange={(e) => {
-                                                const selected = Array.from(e.target.selectedOptions).map((o) => Number(o.value));
-                                                setEditRoleIds(selected);
+                                            <MultiSelectDropdown
+                                                options={sortedRoles.map(r => r.id)}
+                                                selected={editRoleIds}
+                                                onChange={setEditRoleIds}
+                                                placeholder="בחר תפקידים"
+                                                getLabel={(id) => {
+                                                    const role = sortedRoles.find(r => r.id === id);
+                                                    return role?.name || String(id);
                                                 }}
-                                                style={{ width: "100%" }}
-                                            >
-                                                {roles.map((r) => (
-                                                <option key={r.id} value={r.id}>{r.name}</option>
-                                                ))}
-                                            </select>
+                                            />
                                             ) : s.roles?.length ? (
                                             <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
                                                 {s.roles.map((r) => (
@@ -1273,13 +1510,25 @@ export default function SoldiersPage() {
                                         <td>
                                             {isEditing ? (
                                             <select
-                                                value={editDeptId}
-                                                onChange={(e) => setEditDeptId(e.target.value ? Number(e.target.value) : "")}
-                                                style={{ width: "100%" }}
+                                                value={(editDeptId || defaultDepartmentId) ?? ""}
+                                                onChange={(e) => setEditDeptId(Number(e.target.value))}
+                                                required
+                                                disabled={departments.length === 0}
+                                                style={{ 
+                                                    width: "100%",
+                                                    padding: "10px 12px",
+                                                    borderRadius: 8,
+                                                    border: "1px solid #1f2937",
+                                                    backgroundColor: "rgba(255,255,255,0.03)",
+                                                    color: "#e5e7eb",
+                                                    fontSize: 14,
+                                                    cursor: "pointer",
+                                                    direction: "rtl",
+                                                    textAlign: "right",
+                                                }}
                                             >
-                                                <option value="">(אין מחלקה)</option>
                                                 {departments.map((d) => (
-                                                <option key={d.id} value={d.id}>{d.name}</option>
+                                                <option key={d.id} value={d.id} style={{ backgroundColor: "rgba(17, 24, 39, 0.95)", color: "#e5e7eb" }}>{d.name}</option>
                                                 ))}
                                             </select>
                                             ) : (
@@ -1290,19 +1539,19 @@ export default function SoldiersPage() {
                                         {/* restrictions */}
                                         <td>
                                             {isEditing ? (
-                                            <select
-                                                multiple
-                                                size={3}
-                                                value={editRestrictions}
-                                                onChange={(e) => onMultiChangeStrings(e, setEditRestrictions)}
-                                                style={{ width: "100%" }}
-                                            >
-                                                {restrictionOptions.map((n) => (
-                                                <option key={n} value={n}>{n}</option>
-                                                ))}
-                                            </select>
+                                            <MultiSelectDropdown
+                                                options={restrictionOptions}
+                                                selected={editRestrictions}
+                                                onChange={setEditRestrictions}
+                                                placeholder="בחר הגבלות"
+                                                getLabel={(option) => option}
+                                            />
                                             ) : s.restrictions_tokens && s.restrictions_tokens.length ? (
-                                            s.restrictions_tokens.join(", ")
+                                            <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                                                {s.restrictions_tokens.map((restriction, idx) => (
+                                                    <RestrictionsPill key={idx} name={restriction} />
+                                                ))}
+                                            </div>
                                             ) : (
                                             <span style={{ opacity: 0.6 }}>(אין)</span>
                                             )}
@@ -1320,22 +1569,76 @@ export default function SoldiersPage() {
                                         {/* actions */}
                                         <td>
                                         {isEditing ? (
-                                            <>
-                                            <button onClick={() => saveEdit(s.id)}>שמור</button>
-                                            <button onClick={cancelEdit} style={{ marginLeft: 8 }}>בטל</button>
-                                            </>
+                                            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                                                <button 
+                                                    onClick={() => saveEdit(s.id)}
+                                                    title="שמור"
+                                                    style={{ 
+                                                        padding: "4px 8px",
+                                                        border: "none",
+                                                        background: "transparent",
+                                                        cursor: "pointer",
+                                                        display: "inline-flex",
+                                                        alignItems: "center",
+                                                        color: "#e5e7eb"
+                                                    }}
+                                                >
+                                                    <CheckIcon fontSize="small" />
+                                                </button>
+                                                <button 
+                                                    onClick={cancelEdit}
+                                                    title="בטל"
+                                                    style={{ 
+                                                        padding: "4px 8px",
+                                                        border: "none",
+                                                        background: "transparent",
+                                                        cursor: "pointer",
+                                                        display: "inline-flex",
+                                                        alignItems: "center",
+                                                        color: "#e5e7eb"
+                                                    }}
+                                                >
+                                                    <CloseIcon fontSize="small" />
+                                                </button>
+                                            </div>
                                         ) : (
-                                            <>
-                                            <button onClick={() => startEdit(s)} style={{ marginLeft: 8 }}>
-                                                ערוך
-                                            </button>
-                                            <button
-                                                onClick={() => removeSoldier(s.id)}
-                                                style={{ marginLeft: 8, color: "crimson" }}
-                                            >
-                                                מחק
-                                            </button>
-                                            </>
+                                            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                                                <button 
+                                                    onClick={() => startEdit(s)}
+                                                    title="ערוך"
+                                                    style={{ 
+                                                        padding: "4px 8px",
+                                                        border: "none",
+                                                        background: "transparent",
+                                                        cursor: "pointer",
+                                                        display: "inline-flex",
+                                                        alignItems: "center",
+                                                        color: "#e5e7eb"
+                                                    }}
+                                                >
+                                                    <EditIcon fontSize="small" />
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={(e) => {
+                                                        e.preventDefault();
+                                                        e.stopPropagation();
+                                                        showConfirmDeleteSoldier(s.id);
+                                                    }}
+                                                    title="מחק"
+                                                    style={{ 
+                                                        padding: "4px 8px",
+                                                        border: "none",
+                                                        background: "transparent",
+                                                        cursor: "pointer",
+                                                        display: "inline-flex",
+                                                        alignItems: "center",
+                                                        color: "#e5e7eb"
+                                                    }}
+                                                >
+                                                    <DeleteIcon fontSize="small" />
+                                                </button>
+                                            </div>
                                         )}
                                         </td>
                                         </tr>
@@ -1377,6 +1680,54 @@ export default function SoldiersPage() {
 
                 </>
             )}
+
+            {/* Confirmation Modal */}
+            <Modal 
+                open={confirmDlg.isOpen} 
+                onClose={() => {
+                    setPendingDelete(null);
+                    confirmDlg.close();
+                }} 
+                title="אישור מחיקה"
+                maxWidth={480}
+            >
+                <div style={{ display: "grid", gap: 16 }}>
+                    <p style={{ margin: 0, color: "#e5e7eb" }}>{confirmMessage}</p>
+                    <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+                        <button 
+                            type="button"
+                            onClick={() => {
+                                setPendingDelete(null);
+                                confirmDlg.close();
+                            }}
+                            style={{
+                                padding: "8px 16px",
+                                border: "1px solid #1f2937",
+                                borderRadius: 8,
+                                background: "rgba(255,255,255,0.03)",
+                                color: "#e5e7eb",
+                                cursor: "pointer",
+                            }}
+                        >
+                            בטל
+                        </button>
+                        <button 
+                            type="button"
+                            onClick={executeDelete}
+                            style={{
+                                padding: "8px 16px",
+                                border: "1px solid #dc2626",
+                                borderRadius: 8,
+                                background: "rgba(220, 38, 38, 0.1)",
+                                color: "#f87171",
+                                cursor: "pointer",
+                            }}
+                        >
+                            מחק
+                        </button>
+                    </div>
+                </div>
+            </Modal>
 
         </div>
     );

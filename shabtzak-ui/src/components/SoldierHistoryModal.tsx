@@ -114,9 +114,9 @@ export default function SoldierHistoryModal({ soldierId, soldierName, isOpen, on
           <table className="min-w-full border-collapse">
             <thead>
               <tr>
-                <th className="border p-2">משימה</th>
-                <th className="border p-2">חלון זמן</th>
-                <th className="border p-2">חברים למשימה</th>
+                <th className="border" style={{ padding: "12px 16px" }}>משימה</th>
+                <th className="border" style={{ padding: "12px 16px", whiteSpace: "nowrap", maxWidth: "300px" }}>חלון זמן</th>
+                <th className="border" style={{ padding: "12px 16px" }}>חברים למשימה</th>
               </tr>
             </thead>
             <tbody>
@@ -155,9 +155,9 @@ export default function SoldierHistoryModal({ soldierId, soldierName, isOpen, on
 
                 return (
                 <tr key={`${it.mission_id}-${it.slot_date}-${it.start_time}`}>
-                    <td className="border p-2">{it.mission_name}</td>
-                    <td className="border p-2">{timeSlot}</td>
-                    <td className="border p-2">
+                    <td className="border" style={{ padding: "12px 16px" }}>{it.mission_name}</td>
+                    <td className="border" style={{ padding: "12px 16px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "300px" }}>{timeSlot}</td>
+                    <td className="border" style={{ padding: "12px 16px" }}>
                     {it.fellow_soldiers?.length ? it.fellow_soldiers.join(", ") : ""}
                     </td>
                 </tr>
