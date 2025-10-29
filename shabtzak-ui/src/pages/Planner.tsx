@@ -2622,21 +2622,11 @@ async function shufflePlanner() {
                                     if (!r.soldier_id || !r.soldier_name) {
                                       return <span style={{ color: "crimson" }}>לא משובץ</span>;
                                     }
-                                    const tier = restTierForRow(r);
-                                    const style =
-                                      tier === "red"
-                                        ? { color: "crimson", fontWeight: 600 }
-                                        : tier === "orange"
-                                          ? { color: "#d97706", fontWeight: 600 }
-                                          : tier === "green"
-                                            ? { color: "#15803d", fontWeight: 600 }
-                                            : undefined;
                                     return (
                                       <button
                                         type="button"
                                         onClick={() => openSoldierHistory(r.soldier_id!, r.soldier_name)}
                                         className="underline"
-                                        style={style}
                                         title="View Mission History"
                                       >
                                         {r.soldier_name}
