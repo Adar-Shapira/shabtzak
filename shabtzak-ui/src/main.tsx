@@ -8,6 +8,7 @@ import SoldiersPage from "./pages/Soldiers";
 import PlannerPage from "./pages/Planner";
 import AssignmentsPage from "./pages/Assignments";
 import ManpowerCalendarPage from "./pages/ManpowerCalendar";
+import SettingsPage from "./pages/Settings";
 //import DepartmentsPage from "./pages/Departments";
 //import VacationsPage from "./pages/Vacations";
 import "./index.css";
@@ -24,6 +25,7 @@ const router = createBrowserRouter([
       { path: "planner", element: <PlannerPage /> },
       { path: "assignments", element: <AssignmentsPage /> },
       { path: "manpower", element: <ManpowerCalendarPage /> },
+      { path: "settings", element: <SettingsPage /> },
       //{ path: "vacations", element: <VacationsPage /> },
     ],
   },

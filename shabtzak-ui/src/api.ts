@@ -296,3 +296,63 @@ export async function loadSavedPlan(planId: number, day?: string): Promise<{ mes
 export async function deleteSavedPlan(planId: number): Promise<void> {
   await api.delete(`/saved-plans/${planId}`);
 }
+
+// --- Planner Weights Settings ----------------------------------------------------------
+
+export type PlannerWeights = {
+  recent_gap_penalty_per_hour_missing: number;
+  same_mission_recent_penalty: number;
+  mission_repeat_count_penalty: number;
+  today_assignment_count_penalty: number;
+  total_hours_window_penalty_per_hour: number;
+  recent_gap_boost_per_hour: number;
+  slot_repeat_count_penalty: number;
+  coassignment_repeat_penalty: number;
+  rest_before_priority_per_hour: number;
+  rest_after_priority_per_hour: number;
+};
+
+export const DEFAULT_WEIGHTS: PlannerWeights = {
+  recent_gap_penalty_per_hour_missing: 2.0,
+  same_mission_recent_penalty: 5.0,
+  mission_repeat_count_penalty: 1.0,
+  today_assignment_count_penalty: 3.0,
+  total_hours_window_penalty_per_hour: 0.08,
+  recent_gap_boost_per_hour: -1.2,
+  slot_repeat_count_penalty: 0.75,
+  coassignment_repeat_penalty: 0.5,
+  rest_before_priority_per_hour: -1.0,
+  rest_after_priority_per_hour: -0.5,
+};
+
+const WEIGHTS_STORAGE_KEY = "planner_weights";
+
+export function getPlannerWeights(): PlannerWeights {
+  try {
+    if (typeof window === "undefined" || typeof localStorage === "undefined") {
+      return DEFAULT_WEIGHTS;
+    }
+    const stored = localStorage.getItem(WEIGHTS_STORAGE_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      // Merge with defaults to ensure all keys exist (in case of missing keys from old storage)
+      return { ...DEFAULT_WEIGHTS, ...parsed };
+    }
+  } catch (error) {
+    console.error("Error loading planner weights:", error);
+  }
+  return DEFAULT_WEIGHTS;
+}
+
+export function savePlannerWeights(weights: PlannerWeights): void {
+  try {
+    if (typeof window === "undefined" || typeof localStorage === "undefined") {
+      console.warn("localStorage not available, cannot save weights");
+      return;
+    }
+    localStorage.setItem(WEIGHTS_STORAGE_KEY, JSON.stringify(weights));
+  } catch (error) {
+    console.error("Error saving planner weights:", error);
+    throw error;
+  }
+}

@@ -36,7 +36,7 @@ import CloudDownloadIcon from '@mui/icons-material/CloudDownload';
 import DeleteIcon from '@mui/icons-material/Delete';
 import CloseIcon from '@mui/icons-material/Close';
 import VisibilityIcon from '@mui/icons-material/Visibility';
-import { getPlannerWarnings, type PlannerWarning } from "../api"
+import { getPlannerWarnings, type PlannerWarning, getPlannerWeights } from "../api"
 import { listSoldierVacations, type Vacation } from "../api";
 import { useSidebar } from "../contexts/SidebarContext";
 import { useWarnings } from "../contexts/WarningsContext";
@@ -84,7 +84,8 @@ async function fillPlanForDay(
   replace = false,
   opts?: { shuffle?: boolean; random_seed?: number; exclude_slots?: string[]; locked_assignments?: number[] }
 ) {
-  await api.post("/plan/fill", { day: forDay, replace, ...(opts || {}) });
+  const weights = getPlannerWeights();
+  await api.post("/plan/fill", { day: forDay, replace, weights, ...(opts || {}) });
 }
 
 // Literal extractor: "YYYY-MM-DD HH:MM" from a timestamp string (ISO or "YYYY-MM-DD HH:MM[:SS]")

@@ -8,6 +8,7 @@ import Missions from "./pages/Missions";
 import Planner from "./pages/Planner";
 import Assignments from "./pages/Assignments";
 import ManpowerCalendar from "./pages/ManpowerCalendar";
+import Settings from "./pages/Settings";
 
 export default function App() {
   return (
@@ -19,6 +20,7 @@ export default function App() {
         <Route path="planner" element={<Planner />} />
         <Route path="assignments" element={<Assignments />} />
         <Route path="manpower" element={<ManpowerCalendar />} />
+        <Route path="settings" element={<Settings />} />
       </Route>
     </Routes>
   );

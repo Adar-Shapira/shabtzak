@@ -31,6 +31,7 @@ class FillRequest(BaseModel):
     random_seed: Optional[int] = None  # NEW: deterministic shuffle if provided
     exclude_slots: Optional[List[str]] = None  # NEW: slot keys to exclude from assignment
     locked_assignments: Optional[List[int]] = None  # NEW: assignment IDs to preserve during fill/shuffle
+    weights: Optional[Dict[str, float]] = None  # NEW: custom weights for fairness scoring
 
 class PlanResultItem(BaseModel):
     mission: dict
@@ -298,6 +299,7 @@ def _score_candidate(
     assigned_here: set[int],                                  # NEW
     pair_counts: Dict[int, Dict[int, int]],                   # NEW
     vacation_blocks: Dict[int, List[tuple[datetime, datetime]]],  # NEW
+    weights: Dict[str, float],                                # NEW: weights dict
 ) -> float:
     score = 0.0
 
@@ -314,30 +316,30 @@ def _score_candidate(
 
         if gap < timedelta(0):
             missing_hours = abs(gap.total_seconds()) / 3600.0
-            score += WEIGHTS["recent_gap_penalty_per_hour_missing"] * (8.0 + missing_hours)
+            score += weights["recent_gap_penalty_per_hour_missing"] * (8.0 + missing_hours)
         elif gap < EIGHT_HOURS:
             missing = (EIGHT_HOURS - gap).total_seconds() / 3600.0
-            score += WEIGHTS["recent_gap_penalty_per_hour_missing"] * missing
+            score += weights["recent_gap_penalty_per_hour_missing"] * missing
         else:
             extra = (gap - EIGHT_HOURS).total_seconds() / 3600.0
-            score += WEIGHTS["recent_gap_boost_per_hour"] * extra
+            score += weights["recent_gap_boost_per_hour"] * extra
 
     else:
         # No recent work → tiny preference (negative penalty)
-        score += WEIGHTS["recent_gap_boost_per_hour"] * 4.0
+        score += weights["recent_gap_boost_per_hour"] * 4.0
 
     # 2) Rotation: avoid repeating same mission
     if mission_id in st.recent_missions:
-        score += WEIGHTS["same_mission_recent_penalty"]
+        score += weights["same_mission_recent_penalty"]
         count = st.mission_count.get(mission_id, 0)
-        score += WEIGHTS["mission_repeat_count_penalty"] * float(count)
+        score += weights["mission_repeat_count_penalty"] * float(count)
 
     # NEW: penalize repeating the same time-slot bucket (M/E/N)
     bucket = _slot_bucket(start_at)
     if bucket:
         bucket_count = st.slot_bucket_count.get(bucket, 0)
         if bucket_count > 0:
-            score += WEIGHTS.get("slot_repeat_count_penalty", 0.75) * float(bucket_count)
+            score += weights.get("slot_repeat_count_penalty", 0.75) * float(bucket_count)
 
     # NEW: penalize repeated pairing with the same fellow soldiers in this window
     if assigned_here:
@@ -345,13 +347,13 @@ def _score_candidate(
         for fellow_id in assigned_here:
             c = pairs.get(fellow_id, 0)
             if c > 0:
-                score += WEIGHTS.get("coassignment_repeat_penalty", 0.5) * float(c)
+                score += weights.get("coassignment_repeat_penalty", 0.5) * float(c)
 
     # 3) Balance intra-day load
-    score += WEIGHTS["today_assignment_count_penalty"] * float(st.today_count)
+    score += weights["today_assignment_count_penalty"] * float(st.today_count)
 
     # 4) Balance recent workload
-    score += WEIGHTS["total_hours_window_penalty_per_hour"] * float(st.total_hours_window)
+    score += weights["total_hours_window_penalty_per_hour"] * float(st.total_hours_window)
 
     # 5) Prefer longer rest before long shifts a bit more (optional small nudge)
     duration_hours = (end_at - start_at).total_seconds() / 3600.0
@@ -425,6 +427,7 @@ def _collect_candidates_for_slot(
     strict: bool,
     assigned_here: set[int],                                  
     pair_counts: Dict[int, Dict[int, int]],
+    weights: Dict[str, float],                                # NEW: weights dict
     shuffle_mode: bool = False,
     rng: Optional[random.Random] = None,                   
 ) -> List[tuple[float, int, Soldier]]:
@@ -456,6 +459,7 @@ def _collect_candidates_for_slot(
             assigned_here=assigned_here,
             pair_counts=pair_counts,
             vacation_blocks=vacation_blocks,
+            weights=weights,
         )
 
         # Fairness add-on: push toward max-min rest across the day.
@@ -466,8 +470,8 @@ def _collect_candidates_for_slot(
         # Reward assigning the most-rested soldier now (big gap_before),
         # and avoid creating too-short future rests (penalize small gap_after).
         rest_adjust = (
-            WEIGHTS.get("rest_before_priority_per_hour", 0.0) * gap_before_h
-            + WEIGHTS.get("rest_after_priority_per_hour", 0.0) * gap_after_h
+            weights.get("rest_before_priority_per_hour", 0.0) * gap_before_h
+            + weights.get("rest_after_priority_per_hour", 0.0) * gap_after_h
         )
 
         rr_distance = (i - rr_start_idx) % max(1, len(pool))
@@ -490,6 +494,11 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
     # The database stores timezone-aware datetimes, so we need to match that for WHERE clauses
     day_start_aware = day_start.replace(tzinfo=timezone.utc)
     day_end_aware = day_end.replace(tzinfo=timezone.utc)
+    
+    # Merge custom weights with defaults
+    active_weights = WEIGHTS.copy()
+    if req.weights:
+        active_weights.update(req.weights)
     
     ctx = _load_context(db)
     vacation_blocks = _vacation_blocks_for_day(db, the_day)
@@ -678,6 +687,7 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
                         strict=True,
                         assigned_here=assigned_here,            # NEW
                         pair_counts=pair_counts,                # NEW
+                        weights=active_weights,                 # NEW: pass weights
                         shuffle_mode=req.shuffle,                # NEW
                         rng=rng if req.shuffle else None,        # NEW
                     )
@@ -896,6 +906,7 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
                         strict=True,
                         assigned_here=assigned_here,            # NEW
                         pair_counts=pair_counts,                # NEW
+                        weights=active_weights,                 # NEW: pass weights
                         shuffle_mode=req.shuffle,                # NEW
                         rng=rng if req.shuffle else None,        # NEW
                     )
