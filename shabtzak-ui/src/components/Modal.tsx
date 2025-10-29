@@ -72,7 +72,7 @@ export default function Modal({
           {title ?? "Add"}
         </div>
 
-        <div style={{ padding: 16, overflow: "auto" }}>{children}</div>
+        <div style={{ padding: 16, overflowY: "auto", minHeight: 0 }}>{children}</div>
 
         {footer && (
           <div

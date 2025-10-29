@@ -2,6 +2,7 @@
 import { useEffect, useState, useMemo } from "react";
 import { api } from "../api";
 import Modal from "../components/Modal";
+import VacationsModal from "../components/VacationsModal";
 import { useDisclosure } from "../hooks/useDisclosure";
 import { useSidebar, type SidebarActions } from "../contexts/SidebarContext";
 
@@ -40,17 +41,12 @@ export default function ManpowerCalendarPage() {
   
   // Modal for available soldiers
   const modal = useDisclosure(false);
-  const [availableSoldiers, setAvailableSoldiers] = useState<Array<{ soldier: Soldier; leavingToday: boolean; returningToday: boolean }>>([]);
+  const [availableSoldiers, setAvailableSoldiers] = useState<Array<{ soldier: Soldier; leavingToday: boolean; returningToday: boolean; nextVacationDate?: string }>>([]);
   const [onVacationSoldiers, setOnVacationSoldiers] = useState<Array<{ soldier: Soldier; leavingToday: boolean; returningToday: boolean; returnDate?: string }>>([]);
 
   // Vacation modal state
   const vacDlg = useDisclosure(false);
   const [vacSoldier, setVacSoldier] = useState<Soldier | null>(null);
-  const [soldierVacations, setSoldierVacations] = useState<Vacation[]>([]);
-  const [vacEditId, setVacEditId] = useState<number | null>(null);
-  const [vacStart, setVacStart] = useState<string>("");
-  const [vacEnd, setVacEnd] = useState<string>("");
-  const [vacNote, setVacNote] = useState<string>("");
 
   // Search state for the available soldiers modal
   const [searchQuery, setSearchQuery] = useState<string>("");
@@ -89,100 +85,15 @@ export default function ManpowerCalendarPage() {
   }, [setActions]);
 
   // Open vacation modal for a soldier
-  const openVacations = async (s: Soldier) => {
+  const openVacations = (s: Soldier) => {
     setVacSoldier(s);
-    setVacEditId(null);
-    setVacStart("");
-    setVacEnd("");
-    setVacNote("");
-    await fetchSoldierVacations(s.id);
     vacDlg.open();
   };
 
   // Close vacation modal
   const closeVacations = () => {
     setVacSoldier(null);
-    setSoldierVacations([]);
-    setVacEditId(null);
-    setVacStart("");
-    setVacEnd("");
-    setVacNote("");
     vacDlg.close();
-  };
-
-  // Fetch vacations for a soldier
-  const fetchSoldierVacations = async (soldierId: number) => {
-    try {
-      const res = await api.get(`/vacations/soldiers/${soldierId}`);
-      setSoldierVacations(Array.isArray(res.data) ? res.data : []);
-    } catch (e: any) {
-      setSoldierVacations([]);
-    }
-  };
-
-  // Start adding a vacation
-  const startAddVacation = () => {
-    setVacEditId(null);
-    setVacStart("");
-    setVacEnd("");
-    setVacNote("");
-  };
-
-  // Start editing a vacation
-  const startEditVacation = (v: Vacation) => {
-    setVacEditId(v.id!);
-    setVacStart(v.start_date);
-    setVacEnd(v.end_date);
-    setVacNote(v.note ?? "");
-  };
-
-  // Save vacation
-  const saveVacation = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!vacSoldier) return;
-
-    if (vacStart && vacEnd && vacEnd < vacStart) {
-      alert("תאריך סיום לא יכול להיות לפני תאריך התחלה");
-      return;
-    }
-
-    try {
-      const payload: any = { start_date: vacStart, end_date: vacEnd };
-      if (vacNote) payload.note = vacNote;
-
-      if (vacEditId == null) {
-        // CREATE
-        await api.post(`/vacations`, { ...payload, soldier_id: vacSoldier.id });
-      } else {
-        // UPDATE
-        await api.patch(`/vacations/${vacEditId}`, payload);
-      }
-
-      await fetchSoldierVacations(vacSoldier.id);
-      await loadData(); // Refresh main data
-      
-      // Reset form
-      setVacEditId(null);
-      setVacStart("");
-      setVacEnd("");
-      setVacNote("");
-    } catch (e: any) {
-      alert(e?.response?.data?.detail ?? "Failed to save vacation");
-    }
-  };
-
-  // Delete vacation
-  const deleteVacation = async (v: Vacation) => {
-    if (!vacSoldier || !v.id) return;
-    if (!confirm(`למחוק חופשה ${v.start_date} → ${v.end_date}?`)) return;
-    
-    try {
-      await api.delete(`/vacations/${v.id}`);
-      await fetchSoldierVacations(vacSoldier.id);
-      await loadData(); // Refresh main data
-    } catch (e: any) {
-      alert(e?.response?.data?.detail ?? "Failed to delete vacation");
-    }
   };
 
   // Calculate calendar days for the current month
@@ -215,23 +126,37 @@ export default function ManpowerCalendarPage() {
     setFilterDepartment(""); // Reset department filter
     
     // Calculate available soldiers for this day
-    const available: Array<{ soldier: Soldier; leavingToday: boolean; returningToday: boolean }> = [];
+    const available: Array<{ soldier: Soldier; leavingToday: boolean; returningToday: boolean; nextVacationDate?: string }> = [];
     const onVacation: Array<{ soldier: Soldier; leavingToday: boolean; returningToday: boolean; returnDate?: string }> = [];
     
     for (const s of soldiers) {
       const vacs = vacations.filter(v => v.soldier_id === s.id);
       const vacToday = vacs.find(v => isInRange(dayISO, v.start_date, v.end_date));
       
+      // Find next vacation after the selected day
+      const futureVacations = vacs.filter(v => v.start_date > dayISO).sort((a, b) => a.start_date.localeCompare(b.start_date));
+      const nextVacation = futureVacations.length > 0 ? futureVacations[0] : undefined;
+      
       if (!vacToday) {
         // Not on vacation
-        available.push({ soldier: s, leavingToday: false, returningToday: false });
+        available.push({ 
+          soldier: s, 
+          leavingToday: false, 
+          returningToday: false,
+          nextVacationDate: nextVacation?.start_date 
+        });
       } else {
         const leavingToday = vacToday.start_date === dayISO;
         const returningToday = vacToday.end_date === dayISO;
         
         // Soldiers who leave today or return today are considered AVAILABLE
         if (leavingToday || returningToday) {
-          available.push({ soldier: s, leavingToday, returningToday });
+          available.push({ 
+            soldier: s, 
+            leavingToday, 
+            returningToday,
+            nextVacationDate: nextVacation?.start_date 
+          });
         } else {
           // Store the return date for soldiers who are on vacation
           onVacation.push({ soldier: s, leavingToday, returningToday, returnDate: vacToday.end_date });
@@ -339,7 +264,7 @@ export default function ManpowerCalendarPage() {
   }
 
   return (
-    <div style={{ maxWidth: 1200, margin: "24px auto", padding: 0 }}>
+    <div style={{ maxWidth: 1200, padding: 0 }}>
       <div style={{ padding: "8px 16px", textAlign: "center", fontSize: 18, fontWeight: 600, marginBottom: 16 }}>
         {monthNames[currentMonth.getMonth()]} {currentMonth.getFullYear()}
       </div>
@@ -411,9 +336,9 @@ export default function ManpowerCalendarPage() {
         title={selectedModalDate ? `חיילים זמינים — ${selectedModalDate}` : "חיילים זמינים"}
         maxWidth={720}
       >
-        <div style={{ display: "grid", gap: 16 }}>
+        <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
           {/* Search Bar and Filters */}
-          <div style={{ display: "grid", gap: 8 }}>
+          <div style={{ display: "grid", gap: 8, flexShrink: 0 }}>
             <input
               type="text"
               placeholder="חפש חייל..."
@@ -478,9 +403,9 @@ export default function ManpowerCalendarPage() {
           </div>
 
           {/* Soldiers Sections - Side by Side */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, flex: 1, minHeight: 0 }}>
             {/* Available Soldiers Section */}
-            <div>
+            <div style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
                 <h3 style={{ marginBottom: 12, fontSize: 18, fontWeight: 600, color: "#e5e7eb" }}>זמינים ({availableSoldiers.filter(({ soldier }) => {
                 const matchesSearch = !searchQuery || 
                   soldier.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -503,7 +428,7 @@ export default function ManpowerCalendarPage() {
               }).length === 0 ? (
                 <div style={{ opacity: 0.7, padding: 8 }}>לא נמצאו תוצאות</div>
               ) : (
-                <div style={{ display: "grid", gap: 4, maxHeight: 300, overflowY: "auto" }}>
+                <div style={{ display: "grid", gap: 4, flex: 1, minHeight: 0, overflowY: "auto" }}>
                   {availableSoldiers.filter(({ soldier }) => {
                 const matchesSearch = !searchQuery || 
                   soldier.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -512,15 +437,35 @@ export default function ManpowerCalendarPage() {
                 const matchesRole = !filterRole || soldier.roles?.some(r => r.name === filterRole);
                 const matchesDept = !filterDepartment || soldier.department_name === filterDepartment;
                 return matchesSearch && matchesRole && matchesDept;
-              }).map(({ soldier, leavingToday, returningToday }) => (
+              }).sort((a, b) => {
+                // Priority 1: Soldiers leaving today go to the top
+                if (a.leavingToday && !b.leavingToday) return -1;
+                if (!a.leavingToday && b.leavingToday) return 1;
+                
+                // Priority 2: Soldiers returning today go to the bottom
+                if (a.returningToday && !b.returningToday) return 1;
+                if (!a.returningToday && b.returningToday) return -1;
+                
+                // Priority 3: Sort by nextVacationDate (closest first)
+                // If both have dates, sort by date ascending
+                if (a.nextVacationDate && b.nextVacationDate) {
+                  return a.nextVacationDate.localeCompare(b.nextVacationDate);
+                }
+                // If only one has a date, put it first
+                if (a.nextVacationDate && !b.nextVacationDate) return -1;
+                if (!a.nextVacationDate && b.nextVacationDate) return 1;
+                // If neither has a date, maintain original order
+                return 0;
+              }).map(({ soldier, leavingToday, returningToday, nextVacationDate }) => (
                   <div key={soldier.id} style={{ padding: 10, border: "1px solid #1f2937", borderRadius: 8, backgroundColor: "rgba(255,255,255,0.02)" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <div 
+                    <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                      <button
+                        type="button"
                         onClick={() => openVacations(soldier)}
-                        style={{ fontWeight: 500, cursor: "pointer", color: "#60a5fa" }}
+                        className="underline"
                       >
                         {soldier.name}
-                      </div>
+                      </button>
                       {leavingToday && (
                         <span style={{ 
                           fontSize: 11, 
@@ -543,6 +488,17 @@ export default function ManpowerCalendarPage() {
                           חוזר היום מהבית
                         </span>
                       )}
+                      {nextVacationDate && !leavingToday && !returningToday && (
+                        <span style={{ 
+                          fontSize: 11, 
+                          color: "#9ca3af", 
+                          backgroundColor: "rgba(255,255,255,0.05)", 
+                          padding: "2px 6px", 
+                          borderRadius: 4 
+                        }}>
+                          יוצא ב-{nextVacationDate}
+                        </span>
+                      )}
                     </div>
                     {soldier.department_name && (
                       <div style={{ fontSize: 12, opacity: 0.7, marginTop: 2 }}>מחלקה: {soldier.department_name}</div>
@@ -559,7 +515,7 @@ export default function ManpowerCalendarPage() {
             </div>
 
             {/* On Vacation Soldiers Section */}
-            <div>
+            <div style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
               <h3 style={{ marginBottom: 12, fontSize: 18, fontWeight: 600, color: "#9ca3af" }}>בחופשה ({onVacationSoldiers.filter(({ soldier }) => {
                 const matchesSearch = !searchQuery || 
                   soldier.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -582,7 +538,7 @@ export default function ManpowerCalendarPage() {
               }).length === 0 ? (
                 <div style={{ opacity: 0.7, padding: 8 }}>לא נמצאו תוצאות</div>
               ) : (
-                <div style={{ display: "grid", gap: 4, maxHeight: 300, overflowY: "auto" }}>
+                <div style={{ display: "grid", gap: 4, flex: 1, minHeight: 0, overflowY: "auto" }}>
                   {onVacationSoldiers.filter(({ soldier }) => {
                     const matchesSearch = !searchQuery || 
                       soldier.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -591,15 +547,27 @@ export default function ManpowerCalendarPage() {
                     const matchesRole = !filterRole || soldier.roles?.some(r => r.name === filterRole);
                     const matchesDept = !filterDepartment || soldier.department_name === filterDepartment;
                     return matchesSearch && matchesRole && matchesDept;
+                  }).sort((a, b) => {
+                    // Sort by returnDate (closest first)
+                    // If both have dates, sort by date ascending
+                    if (a.returnDate && b.returnDate) {
+                      return a.returnDate.localeCompare(b.returnDate);
+                    }
+                    // If only one has a date, put it first
+                    if (a.returnDate && !b.returnDate) return -1;
+                    if (!a.returnDate && b.returnDate) return 1;
+                    // If neither has a date, maintain original order
+                    return 0;
                   }).map(({ soldier, returnDate }) => (
                     <div key={soldier.id} style={{ padding: 10, border: "1px solid #1f2937", borderRadius: 8, backgroundColor: "rgba(255,255,255,0.01)", opacity: 0.8 }}>
                       <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-                        <span 
+                        <button
+                          type="button"
                           onClick={() => openVacations(soldier)}
-                          style={{ fontWeight: 500, cursor: "pointer", color: "#60a5fa" }}
+                          className="underline"
                         >
                           {soldier.name}
-                        </span>
+                        </button>
                         {returnDate && (
                           <span style={{ 
                             fontSize: 11, 
@@ -630,96 +598,12 @@ export default function ManpowerCalendarPage() {
       </Modal>
 
       {/* Vacation Management Modal */}
-      <Modal
-        open={vacDlg.isOpen}
+      <VacationsModal
+        isOpen={vacDlg.isOpen}
         onClose={closeVacations}
-        title={vacSoldier ? `חופשות — ${vacSoldier.name}` : "חופשות"}
-        maxWidth={720}
-      >
-        {!vacSoldier ? (
-          <div style={{ opacity: 0.7 }}>לא נבחר חייל</div>
-        ) : (
-          <div style={{ display: "grid", gap: 12 }}>
-            {/* Toolbar */}
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div style={{ fontSize: 12, opacity: 0.75 }}>
-                הוסף טווח תאריכים בהם החייל בחופשה
-              </div>
-              <div style={{ display: "flex", gap: 8 }}>
-                <button onClick={startAddVacation}>הוסף</button>
-                <button onClick={closeVacations}>סגור</button>
-              </div>
-            </div>
-
-            {/* Add/Edit form */}
-            <form onSubmit={saveVacation} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr auto", gap: 8, alignItems: "center" }}>
-              <div>
-                <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 4 }}>התחלה</div>
-                <input type="date" value={vacStart} onChange={(e) => setVacStart(e.target.value)} required />
-              </div>
-              <div>
-                <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 4 }}>סיום</div>
-                <input type="date" value={vacEnd} onChange={(e) => setVacEnd(e.target.value)} required />
-              </div>
-              <div>
-                <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 4 }}>הערות</div>
-                <input type="text" value={vacNote} onChange={(e) => setVacNote(e.target.value)} placeholder="Optional" />
-              </div>
-              <div style={{ display: "flex", gap: 8, alignItems: "end" }}>
-                <button type="submit">{vacEditId == null ? "הוסף" : "שמור"}</button>
-                {vacEditId != null && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setVacEditId(null);
-                      setVacStart("");
-                      setVacEnd("");
-                      setVacNote("");
-                    }}
-                  >
-                    בטל
-                  </button>
-                )}
-              </div>
-            </form>
-
-            {/* Vacations list */}
-            <table width="100%" cellPadding={7} style={{ borderCollapse: "collapse" }}>
-              <thead>
-                <tr>
-                  <th style={{ width: 140 }}>התחלה</th>
-                  <th style={{ width: 140 }}>סיום</th>
-                  <th>הערות</th>
-                  <th style={{ width: 160 }}>פעולות</th>
-                </tr>
-              </thead>
-              <tbody>
-                {soldierVacations.map((v) => (
-                  <tr key={v.id} style={{ borderTop: "1px solid #eee" }}>
-                    <td>{v.start_date}</td>
-                    <td>{v.end_date}</td>
-                    <td>{v.note ?? <span style={{ opacity: 0.6 }}>(אין)</span>}</td>
-                    <td>
-                      <button onClick={() => startEditVacation(v)}>ערוך</button>
-                      <button 
-                        onClick={() => deleteVacation(v)} 
-                        style={{ marginLeft: 8, color: "crimson" }}
-                      >
-                        מחק
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-                {soldierVacations.length === 0 && (
-                  <tr>
-                    <td colSpan={4} style={{ opacity: 0.7 }}>(אין חופשות)</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Modal>
+        soldier={vacSoldier}
+        onVacationsUpdated={loadData}
+      />
     </div>
   );
 }

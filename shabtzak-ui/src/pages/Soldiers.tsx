@@ -10,7 +10,8 @@ import { api } from "../api";
 import Modal from "../components/Modal";
 import { useDisclosure } from "../hooks/useDisclosure";
 import { listMissions, getSoldierMissionRestrictions, putSoldierMissionRestrictions, type Mission } from "../api";
-import SoldierHistoryModal from "../components/SoldierHistoryModal"
+import SoldierHistoryModal from "../components/SoldierHistoryModal";
+import VacationsModal from "../components/VacationsModal";
 import { useSidebar } from "../contexts/SidebarContext";
 
 
@@ -24,13 +25,6 @@ type Department = {
     name: string 
 };
 
-type Vacation = {
-    id: number;
-    soldier_id: number;
-    start_date: string; // ISO yyyy-mm-dd
-    end_date: string;   // ISO yyyy-mm-dd
-    note?: string | null;
-};
 
 type Soldier = {
     id: number;
@@ -314,7 +308,7 @@ export default function SoldiersPage() {
     // Confirmation modal for deletions
     const confirmDlg = useDisclosure(false);
     const [confirmMessage, setConfirmMessage] = useState<string>("");
-    const [pendingDelete, setPendingDelete] = useState<{ type: "soldier" | "department" | "role" | "vacation"; id: number; name?: string; vacation?: Vacation; soldierId?: number } | null>(null);
+    const [pendingDelete, setPendingDelete] = useState<{ type: "soldier" | "department" | "role"; id: number; name?: string } | null>(null);
 
 
     const openRestrictions = async (s: Soldier) => {
@@ -461,200 +455,15 @@ export default function SoldiersPage() {
     // --- Vacations per Soldier ---
     const vacDlg = useDisclosure(false);
     const [vacSoldier, setVacSoldier] = useState<Soldier | null>(null);
-    const [vacations, setVacations] = useState<Vacation[]>([]);
 
-    // vacation form state
-    const [vacEditId, setVacEditId] = useState<number | null>(null);
-    const [vacStart, setVacStart] = useState<string>("");
-    const [vacEnd, setVacEnd] = useState<string>("");
-    const [vacNote, setVacNote] = useState<string>("");
-
-    const openVacations = async (s: Soldier) => {
-        setErr(null);
+    const openVacations = (s: Soldier) => {
         setVacSoldier(s);
-
-        // Reset form
-        setVacEditId(null);
-        setVacStart("");
-        setVacEnd("");
-        setVacNote("");
-
-        await fetchVacations(s.id);   // load first
-        vacDlg.open();                // then open with data already in state
+        vacDlg.open();
     };
 
     const closeVacations = () => {
-    setVacSoldier(null);
-    setVacations([]);
-    setVacEditId(null);
-    setVacStart("");
-    setVacEnd("");
-    setVacNote("");
-    vacDlg.close();
-    };
-
-    const startAddVacation = () => {
-    setVacEditId(null);
-    setVacStart("");
-    setVacEnd("");
-    setVacNote("");
-    };
-
-    const startEditVacation = (v: Vacation) => {
-    setVacEditId(v.id);
-    setVacStart(v.start_date);
-    setVacEnd(v.end_date);
-    setVacNote(v.note ?? "");
-    };
-
-    const saveVacation = async (e: React.FormEvent) => {
-        e.preventDefault();
-        if (!vacSoldier) return;
-
-        if (vacStart && vacEnd && vacEnd < vacStart) {
-            alert("End date cannot be before start date.");
-            return;
-        }
-
-        setErr(null);
-        try {
-            const payload = { start_date: vacStart, end_date: vacEnd, note: vacNote || null };
-
-            if (vacEditId == null) {
-            // CREATE
-            let created: Vacation | null = null;
-            try {
-                const r = await api.post(`/soldiers/${vacSoldier.id}/vacations`, payload);
-                created = r.data as Vacation;
-            } catch (e: any) {
-                if (e?.response?.status === 404) {
-                const r = await api.post(`/vacations`, { ...payload, soldier_id: vacSoldier.id });
-                created = r.data as Vacation;
-                } else {
-                throw e;
-                }
-            }
-
-            // If backend returned the created row, update immediately; otherwise hard refresh.
-            if (created && created.id) {
-                setVacations(prev => [...prev, created!]);
-            } else {
-                await fetchVacations(vacSoldier.id);
-            }
-            } else {
-            // UPDATE
-            let updated: Vacation | null = null;
-            try {
-                const r = await api.patch(`/soldiers/${vacSoldier.id}/vacations/${vacEditId}`, payload);
-                updated = r.data as Vacation;
-            } catch (e: any) {
-                if (e?.response?.status === 404) {
-                const r = await api.patch(`/vacations/${vacEditId}`, { ...payload, soldier_id: vacSoldier.id });
-                updated = r.data as Vacation;
-                } else {
-                throw e;
-                }
-            }
-
-            // If backend returned the updated row, merge it; otherwise hard refresh.
-            if (updated && updated.id) {
-                setVacations(prev => prev.map(v => (v.id === updated!.id ? updated! : v)));
-            } else {
-                await fetchVacations(vacSoldier.id);
-            }
-            }
-
-            // Reset form
-            setVacEditId(null);
-            setVacStart("");
-            setVacEnd("");
-            setVacNote("");
-
-        } catch (e: any) {
-            setErr(e?.response?.data?.detail ?? "Failed to save vacation");
-        }
-    };
-
-    const fetchVacations = async (soldierId: number) => {
-        // helper to normalize IDs to numbers (handles string/number mismatches)
-        const sameId = (x: any, y: any) => Number(x) === Number(y);
-
-        try {
-            // 1) Try soldier-scoped endpoint
-            try {
-            const r = await api.get(`/soldiers/${soldierId}/vacations`, { params: { t: Date.now() } });
-            const payload = r.data ?? [];
-            const items = Array.isArray(payload) ? payload : (payload.items ?? payload.results ?? []);
-            // Even if the API misbehaves, enforce client-side filter:
-            setVacations(items.filter((v: Vacation) => sameId(v.soldier_id, soldierId)));
-
-            return;
-            } catch (_e) {
-            // fall through
-            }
-
-            // 2) Try global endpoint with common param names
-            const tryGlobal = async (param: string) => {
-            const r = await api.get(`/vacations`, { params: { [param]: soldierId, t: Date.now() } });
-            const payload = r.data ?? [];
-            const items = Array.isArray(payload) ? payload : (payload.items ?? payload.results ?? []);
-            // Force client-side filter in case the backend ignores the param:
-            setVacations(items.filter((v: Vacation) => sameId(v.soldier_id, soldierId)));
-
-            return true;
-            };
-
-            const ok =
-            (await tryGlobal("soldier_id").catch(() => false)) ||
-            (await tryGlobal("soldierId").catch(() => false)) ||
-            (await tryGlobal("sid").catch(() => false));
-
-            if (!ok) {
-            setErr("Failed to load vacations: no matching endpoint");
-            // Keep whatever we had; don't clear the list
-            }
-        } catch (e: any) {
-            setErr(e?.response?.data?.detail ?? "Failed to load vacations");
-        } finally {
-        }
-    };
-
-    const showConfirmDeleteVacation = (v: Vacation) => {
-        if (!vacSoldier) return;
-        const dateRange = `${v.start_date} → ${v.end_date}`;
-        setConfirmMessage(`האם למחוק את החופשה ${dateRange}?`);
-        setPendingDelete({ type: "vacation", id: v.id, vacation: v, soldierId: vacSoldier.id });
-        confirmDlg.open();
-    };
-
-    const deleteVacation = (v: Vacation) => {
-        showConfirmDeleteVacation(v);
-    };
-
-    const executeDeleteVacation = async (v: Vacation, soldierId: number) => {
-        setErr(null);
-        try {
-            let ok = false;
-            try {
-            const r = await api.delete(`/soldiers/${soldierId}/vacations/${v.id}`);
-            ok = r.status >= 200 && r.status < 300;
-            } catch (e: any) {
-            if (e?.response?.status === 404) {
-                const r = await api.delete(`/vacations/${v.id}`);
-                ok = r.status >= 200 && r.status < 300;
-            } else {
-                throw e;
-            }
-            }
-            // Optimistic remove
-            if (ok) {
-            setVacations(prev => prev.filter(x => x.id !== v.id));
-            } else {
-            await fetchVacations(soldierId);
-            }
-        } catch (e: any) {
-            setErr(e?.response?.data?.detail ?? "Failed to delete vacation");
-        }
+        setVacSoldier(null);
+        vacDlg.close();
     };
 
     // DELETE
@@ -677,10 +486,6 @@ export default function SoldiersPage() {
             } else if (pendingDelete.type === "role") {
                 await api.delete(`/roles/${pendingDelete.id}`);
                 await loadAll();
-            } else if (pendingDelete.type === "vacation") {
-                if (pendingDelete.vacation && pendingDelete.soldierId) {
-                    await executeDeleteVacation(pendingDelete.vacation, pendingDelete.soldierId);
-                }
             } else {
                 await api.delete(`/soldiers/${pendingDelete.id}`);
                 await loadAll();
@@ -693,8 +498,6 @@ export default function SoldiersPage() {
                 errorMsg = "Failed to delete department";
             } else if (pendingDelete.type === "role") {
                 errorMsg = "Failed to delete role";
-            } else if (pendingDelete.type === "vacation") {
-                errorMsg = "Failed to delete vacation";
             } else {
                 errorMsg = "Failed to delete soldier";
             }
@@ -747,12 +550,6 @@ export default function SoldiersPage() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [setActions]);
 
-    // Always refresh the list whenever the Vacations modal opens
-    useEffect(() => {
-        if (vacDlg.isOpen && vacSoldier) {
-            fetchVacations(vacSoldier.id);
-        }
-    }, [vacDlg.isOpen, vacSoldier?.id]);
 
     // Filter soldiers based on search query and role filter
     const filteredSoldiers = useMemo(() => {
@@ -1173,65 +970,24 @@ export default function SoldiersPage() {
             </Modal>
 
             {/* Vacations Modal */}
+            <VacationsModal
+                isOpen={vacDlg.isOpen}
+                onClose={closeVacations}
+                soldier={vacSoldier}
+                onVacationsUpdated={loadAll}
+            />
+
+            {/* Restrictions Modal */}
             <Modal
-            open={vacDlg.isOpen}
-            onClose={closeVacations}
-            title={vacSoldier ? `חופשות — ${vacSoldier.name}` : "חופשות"}
-            maxWidth={720}
+                open={restrDlg.isOpen}
+                onClose={closeRestrictions}
+                title={restrSoldier ? `Mission Restrictions — ${restrSoldier.name}` : "Mission Restrictions"}
+                maxWidth={720}
             >
-                {!vacSoldier ? (
+                {!restrSoldier ? (
                     <div style={{ opacity: 0.7 }}>לא נבחר חייל</div>
                 ) : (
                     <div style={{ display: "grid", gap: 12 }}>
-                    {/* Toolbar */}
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                        <div style={{ fontSize: 12, opacity: 0.75 }}>
-                            הוסף טווח תאריכים בהם החייל בחופשה
-                        </div>
-                    </div>
-
-                    {/* Add/Edit form */}
-                    <form onSubmit={saveVacation} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr auto", gap: 8, alignItems: "end" }}>
-                        <div>
-                        <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 4 }}>התחלה</div>
-                        <input type="date" value={vacStart} onChange={(e) => setVacStart(e.target.value)} required />
-                        </div>
-                        <div>
-                        <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 4 }}>סיום</div>
-                        <input type="date" value={vacEnd} onChange={(e) => setVacEnd(e.target.value)} required />
-                        </div>
-                        <div>
-                        <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 4 }}>הערות</div>
-                        <input type="text" value={vacNote} onChange={(e) => setVacNote(e.target.value)} placeholder="הערות" />
-                        </div>
-                        <div style={{ display: "flex", gap: 8 }}>
-                        <button type="submit">{vacEditId == null ? "הוסף" : "שמור"}</button>
-                        {vacEditId != null && (
-                            <button
-                            type="button"
-                            onClick={() => {
-                                setVacEditId(null);
-                                setVacStart("");
-                                setVacEnd("");
-                                setVacNote("");
-                            }}
-                            >
-                            בטל
-                            </button>
-                        )}
-                        </div>
-                    </form>
-
-                    <Modal
-                    open={restrDlg.isOpen}
-                    onClose={closeRestrictions}
-                    title={restrSoldier ? `Mission Restrictions — ${restrSoldier.name}` : "Mission Restrictions"}
-                    maxWidth={720}
-                    >
-                    {!restrSoldier ? (
-                        <div style={{ opacity: 0.7 }}>לא נבחר חייל</div>
-                    ) : (
-                        <div style={{ display: "grid", gap: 12 }}>
                         <div style={{ fontSize: 12, opacity: 0.75 }}>
                             חיילים לא ישובצו למשימות שנבחרו
                         </div>
@@ -1274,58 +1030,6 @@ export default function SoldiersPage() {
                             {restrSoldier && savingRestr === restrSoldier.id ? "בשמירה..." : "שמור"}
                             </button>
                         </div>
-                        </div>
-                    )}
-                    </Modal>
-
-                    {/* Vacations list */}
-                    <table width="100%" cellPadding={7} style={{ borderCollapse: "collapse" }}>
-                        <thead>
-                        <tr>
-                            {/*<th style={{ width: 60 }}>ID</th>*/}
-                            <th style={{ width: 140 }}>התחלה</th>
-                            <th style={{ width: 140 }}>סיום</th>
-                            <th>הערות</th>
-                            <th style={{ width: 160 }}>פעולות</th>
-                        </tr>
-                        </thead>
-                        <tbody>
-                        {vacations.map((v) => (
-                            <tr key={v.id} style={{ borderTop: "1px solid #eee" }}>
-                            <td>{v.start_date}</td>
-                            <td>{v.end_date}</td>
-                            <td>{v.note ?? <span style={{ opacity: 0.6 }}>(אין)</span>}</td>
-                            <td>
-                                <button
-                                    type="button"
-                                    onClick={(e) => {
-                                        e.preventDefault();
-                                        e.stopPropagation();
-                                        deleteVacation(v);
-                                    }}
-                                    title="מחק"
-                                    style={{ 
-                                        padding: "4px 8px",
-                                        border: "none",
-                                        background: "transparent",
-                                        cursor: "pointer",
-                                        display: "inline-flex",
-                                        alignItems: "center",
-                                        color: "#e5e7eb"
-                                    }}
-                                >
-                                    <DeleteIcon fontSize="small" />
-                                </button>
-                            </td>
-                            </tr>
-                        ))}
-                        {vacations.length === 0 && (
-                            <tr>
-                            <td colSpan={5} style={{ opacity: 0.7 }}>(אין חופשות)</td>
-                            </tr>
-                        )}
-                        </tbody>
-                    </table>
                     </div>
                 )}
             </Modal>
