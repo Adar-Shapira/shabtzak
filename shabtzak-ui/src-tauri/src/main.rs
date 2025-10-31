@@ -22,6 +22,22 @@ fn main() {
             let _ = std::fs::create_dir_all(&app_dir);
 
             let db_path = app_dir.join("shabtzak.db");
+            
+            // On first launch, copy the bundled database to user's app data directory
+            // This ensures all users get the initial data with Hebrew soldier names
+            if !db_path.exists() {
+                if let Some(resource_dir) = app_handle.path_resolver().resource_dir() {
+                    let resource_path = resource_dir.join("shabtzak.db");
+                    if resource_path.exists() {
+                        if let Err(e) = std::fs::copy(&resource_path, &db_path) {
+                            eprintln!("Failed to copy initial database: {}", e);
+                        } else {
+                            println!("[Shabtzak] Initialized database from bundle");
+                        }
+                    }
+                }
+            }
+            
             let database_url = format!(
                 "sqlite:///{}",
                 db_path.to_string_lossy().replace('\\', "/")
