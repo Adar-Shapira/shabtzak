@@ -1,5 +1,5 @@
 // shabtzak-ui\src\contexts\SidebarContext.tsx
-import React, { createContext, useContext, useState, ReactNode } from 'react';
+import { createContext, useContext, useState, type ReactNode } from 'react';
 
 export interface SidebarActions {
   onAddSoldier?: () => void;

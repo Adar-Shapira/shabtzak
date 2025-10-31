@@ -1,10 +1,34 @@
 // shabtzak-ui\src\api.ts
 import axios, { AxiosError } from "axios";
 
+// Get backend URL from localStorage (set by Tauri), window global, or environment variable
+const getBackendURL = (): string => {
+  if (typeof window !== 'undefined') {
+    // Check localStorage first (persists across reloads)
+    const stored = localStorage.getItem('backend_url');
+    if (stored) return stored;
+    
+    // Check Tauri-injected global
+    if ((window as any).__BACKEND_URL__) {
+      return (window as any).__BACKEND_URL__;
+    }
+  }
+  // Fallback to environment variable or default
+  return import.meta.env.VITE_API_URL ?? "http://localhost:8000";
+};
+
 export const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL ?? "http://localhost:8000",
+  baseURL: getBackendURL(),
   // withCredentials: true, // enable if you later add cookies/auth
 });
+
+// Function to update API base URL dynamically (called by Tauri)
+if (typeof window !== 'undefined') {
+  (window as any).updateApiBaseURL = (newUrl: string) => {
+    api.defaults.baseURL = newUrl;
+    localStorage.setItem('backend_url', newUrl);
+  };
+}
 
 // --- Types ------------------------------------------------------------------
 

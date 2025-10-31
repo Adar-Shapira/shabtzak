@@ -15,8 +15,17 @@ DATABASE_URL = os.getenv(
     "postgresql+psycopg://shabtzak:devpass@db:5432/shabtzak",
 )
 
-# pool_pre_ping avoids “stale” connections on container restarts
-engine = create_engine(DATABASE_URL, pool_pre_ping=True, future=True)
+# SQLite-specific engine configuration
+if DATABASE_URL.startswith("sqlite"):
+    # SQLite doesn't support pool_pre_ping, and needs check_same_thread=False for SQLAlchemy 2.0
+    engine = create_engine(
+        DATABASE_URL,
+        connect_args={"check_same_thread": False},
+        echo=False,
+    )
+else:
+    # PostgreSQL/other databases
+    engine = create_engine(DATABASE_URL, pool_pre_ping=True, future=True)
 
 SessionLocal = sessionmaker(
     bind=engine,
