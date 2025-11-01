@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build && powershell -ExecutionPolicy Bypass -File fix-installer.ps1"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",

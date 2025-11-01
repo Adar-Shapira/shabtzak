@@ -16,7 +16,8 @@ python -m pip install -r requirements.txt
 $specOut = Join-Path (Get-Location) "dist"
 if (Test-Path $specOut) { Remove-Item $specOut -Recurse -Force }
 
-pyinstaller --noconfirm --onefile --name api-server start.py
+# Build as windowless application (no console window) - runs silently in background
+python -m PyInstaller --noconfirm --onefile --noconsole --name api-server start.py
 
 $exe = Join-Path (Get-Location) "dist\api-server.exe"
 if (-not (Test-Path $exe)) {

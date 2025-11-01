@@ -60,6 +60,8 @@ fn main() {
             cmd = cmd.envs(envs)
                 .args(["--host", "127.0.0.1", "--port", "8000"]);
 
+            // Spawn the backend API server silently in the background
+            // It will run automatically when the app starts
             let (mut rx, _child) = cmd.spawn().map_err(|e| {
                 eprintln!("Failed to start backend sidecar: {}", e);
                 e
