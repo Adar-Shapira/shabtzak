@@ -1,5 +1,5 @@
 // shabtzak-ui/src/pages/Planner.tsx
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import {
   listSoldiers,
@@ -247,6 +247,7 @@ export default function Planner() {
   const [warnings, setWarnings] = useState<PlannerWarning[]>([])
   const [warnLoading, setWarnLoading] = useState(false)
   const [warnError, setWarnError] = useState<string | null>(null)
+  const warningsLoadingDayRef = useRef<string | null>(null)
   const [rowsForWarnings, setRowsForWarnings] = useState<FlatRosterItem[]>([]);
 
   const [soldiersById, setSoldiersById] = useState<Map<number, Soldier>>(new Map());
@@ -382,29 +383,68 @@ export default function Planner() {
   }
 
   async function loadWarnings(forDay: string) {
+    // Prevent duplicate concurrent calls for the same day
+    if (warnLoading && warningsLoadingDayRef.current === forDay) {
+      console.log(`[DEBUG] Skipping duplicate loadWarnings call for ${forDay}`);
+      return;
+    }
     try {
       setWarnLoading(true);
+      warningsLoadingDayRef.current = forDay;
       setWarnError(null);
       const items = await getPlannerWarnings(forDay); // <-- pass day
-      setWarnings(items);
-      // Update context with full warning details
-      const warningItems = items.map(w => ({
-        type: w.type,
-        soldier_name: w.soldier_name,
-        soldier_id: w.soldier_id,
-        mission_name: w.mission_name,
-        mission_id: w.mission_id,
-        start_at: w.start_at,
-        end_at: w.end_at,
-        details: w.details,
-        level: w.level,
-        assignment_id: w.assignment_id
-      }));
-      setWarningsContext(warningItems);
+      
+      // Debug: log ALL warnings to see what we're getting
+      console.log(`[WARNINGS DEBUG] All warnings from API for ${forDay}:`, items);
+      
+      // Debug: log warning types
+      const warningTypes = items.reduce((acc, w) => {
+        acc[w.type] = (acc[w.type] || 0) + 1;
+        return acc;
+      }, {} as Record<string, number>);
+      const withAssignmentId = items.filter(w => w.assignment_id != null).length;
+      const withoutAssignmentId = items.filter(w => w.assignment_id == null).length;
+      console.log(`Warnings for ${forDay}:`, warningTypes, `Total: ${items.length} (with assignment_id: ${withAssignmentId}, without: ${withoutAssignmentId})`);
+      const restricted = items.filter(w => w.type === "RESTRICTED");
+      console.log(`[RESTRICTED DEBUG] Found ${restricted.length} RESTRICTED warnings (expected 3):`, restricted);
+      if (restricted.length > 0) {
+        console.log("RESTRICTED warnings details:", restricted.map(w => ({ type: w.type, assignment_id: w.assignment_id, soldier: w.soldier_name, mission: w.mission_name, start_at: w.start_at })));
+      } else {
+        console.warn(`[RESTRICTED DEBUG] Expected RESTRICTED warnings but found none! All warning types: ${Object.keys(warningTypes).join(', ')}`);
+      }
+      const restWarnings = items.filter(w => w.type === "REST");
+      if (restWarnings.length > 0) {
+        console.log("REST warnings found:", restWarnings.map(w => ({ type: w.type, assignment_id: w.assignment_id, soldier: w.soldier_name })));
+      }
+      
+      // Only update if this is still the correct day (prevent race conditions)
+      if (warningsLoadingDayRef.current === forDay) {
+        setWarnings(items);
+        
+        // Update context with full warning details
+        const warningItems = items.map(w => ({
+          type: w.type,
+          soldier_name: w.soldier_name,
+          soldier_id: w.soldier_id,
+          mission_name: w.mission_name,
+          mission_id: w.mission_id,
+          start_at: w.start_at,
+          end_at: w.end_at,
+          details: w.details,
+          level: w.level,
+          assignment_id: w.assignment_id
+        }));
+        setWarningsContext(warningItems);
+      } else {
+        console.log(`[DEBUG] Ignoring warnings result for ${forDay} (expected ${warningsLoadingDayRef.current})`);
+      }
     } catch (e: any) {
       setWarnError(e?.message || "Failed to load warnings");
     } finally {
       setWarnLoading(false);
+      if (warningsLoadingDayRef.current === forDay) {
+        warningsLoadingDayRef.current = null;
+      }
     }
   }
 
@@ -2588,7 +2628,7 @@ async function shufflePlanner() {
                             
                             // This is an assigned slot
                             const r = assignment;
-                            // ⛳ ANCHOR: merge RESTRICTED pill into Assignments->Warnings
+                            // Use ONLY API warnings - no local fallback to ensure consistency with sidebar
                             const apiWarnings = warningsByAssignmentId.get(r.id) || [];
 
                             const coloredApi: Array<{ type: string; color?: "red" | "orange" | "gray" }> =
@@ -2597,21 +2637,13 @@ async function shufflePlanner() {
                                   w.level === "RED" ? "red" : w.level === "ORANGE" ? "orange" : undefined;
                                 return {
                                   type: w.type,
-                                  // RESTRICTED stays gray; otherwise use level when present
-                                  color: w.type === "RESTRICTED" ? "gray" : levelColor,
+                                  // RESTRICTED uses ORANGE level from API, not gray
+                                  color: w.type === "RESTRICTED" ? (w.level === "ORANGE" ? "orange" : undefined) : levelColor,
                                 };
                               });
 
-                            // if there are API pills we use them; if not, we fall back to local overlap/rest
-                            const basePills =
-                              coloredApi.length > 0 ? coloredApi : pillItemsForRow(r);
-                            // add RESTRICTED (orange) if the soldier is restricted for this mission
-                            const restrictedPill = isRowRestricted(r)
-                              ? [{ type: "RESTRICTED", color: "orange" } as const]
-                              : [];
-
-                            // final set (WarningsCell already dedups)
-                            const pillItems = [...basePills, ...restrictedPill];
+                            // Use only API warnings - they should include all RESTRICTED warnings
+                            const pillItems = coloredApi;
 
                             return (
                               <tr key={`${slot.key}-${slotIndex}`} className="border-l-4 border-r-4 border-blue-400">

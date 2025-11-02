@@ -108,6 +108,42 @@ def list_soldiers():
                 "missions_history": x.missions_history,
             })
         return out
+    
+    with SessionLocal() as s:
+        rows = (
+            s.execute(
+                select(Soldier)
+                .options(
+                    selectinload(Soldier.roles),
+                    selectinload(Soldier.department),
+                    selectinload(Soldier.mission_restrictions).selectinload("mission")
+                )
+                .order_by(Soldier.id)
+            )
+            .scalars()
+            .all()
+        )
+        out = []
+        for x in rows:
+            out.append({
+                "id": x.id,
+                "name": x.name,
+                "roles": [{"id": r.id, "name": r.name} for r in (x.roles or [])],
+                "department_id": x.department_id,
+                "department_name": x.department.name if x.department else None,
+                "restrictions": x.restrictions,
+                "restrictions_tokens": [t.strip() for t in x.restrictions.replace(";", ",").split(",") if t.strip()],
+                "mission_restrictions": [
+                    {
+                        "mission_id": mr.mission_id,
+                        "mission_name": (mr.mission.name if mr.mission else None),
+                    }
+                    for mr in (x.mission_restrictions or [])
+                ],
+                "mission_restriction_ids": [mr.mission_id for mr in (x.mission_restrictions or [])],
+                "missions_history": x.missions_history,
+            })
+        return out
 
 @router.post("", status_code=201)
 def create_soldier(payload: SoldierIn):

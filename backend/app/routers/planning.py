@@ -7,7 +7,7 @@ import math
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import select, and_, delete
+from sqlalchemy import select, and_, delete, text
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.db import get_db
@@ -494,6 +494,23 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
     # The database stores timezone-aware datetimes, so we need to match that for WHERE clauses
     day_start_aware = day_start.replace(tzinfo=timezone.utc)
     day_end_aware = day_end.replace(tzinfo=timezone.utc)
+    
+    # Fix sequence if out of sync (prevents duplicate key errors)
+    try:
+        result = db.execute(text("SELECT MAX(id) FROM assignments"))
+        max_id = result.scalar()
+        if max_id is not None:
+            # Check current sequence value
+            seq_result = db.execute(text("SELECT last_value FROM assignments_id_seq"))
+            seq_value = seq_result.scalar()
+            if seq_value <= max_id:
+                # Sequence is behind, fix it
+                db.execute(text(f"SELECT setval('assignments_id_seq', {max_id}, true)"))
+                db.commit()
+    except Exception as e:
+        # If sequence fix fails, log but continue (might not be a sequence table)
+        print(f"[WARN] Could not fix sequence: {e}")
+        pass
     
     # Merge custom weights with defaults
     active_weights = WEIGHTS.copy()

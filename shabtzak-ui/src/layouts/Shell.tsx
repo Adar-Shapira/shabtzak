@@ -1,6 +1,6 @@
 // shabtzak-ui\src\layouts\Shell.tsx
 import { Outlet, useLocation } from "react-router-dom";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import NavBar from "../components/NavBar";
 import Sidebar from "../components/Sidebar";
 import { SidebarProvider } from "../contexts/SidebarContext";

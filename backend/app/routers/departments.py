@@ -1,7 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from sqlalchemy import select, insert, update, delete, func
 from sqlalchemy.exc import IntegrityError
-import logging
 
 from app.db import SessionLocal
 from app.models.department import Department
@@ -9,7 +8,6 @@ from app.models.soldier import Soldier
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/departments", tags=["departments"])
-logger = logging.getLogger(__name__)
 
 
 class DepartmentIn(BaseModel):
@@ -25,57 +23,17 @@ def list_departments():
 
 @router.post("", status_code=201)
 def create_department(payload: DepartmentIn):
-    try:
-        # Safe logging that handles encoding issues
+    with SessionLocal() as s:
+        name = payload.name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Name required")
         try:
-            logger.info(f"[departments] Creating department with name: '{payload.name}'")
-        except Exception:
-            pass  # Skip logging if encoding fails
-            
-        with SessionLocal() as s:
-            name = payload.name.strip()
-            if not name:
-                try:
-                    logger.warning("[departments] Error: Empty name")
-                except Exception:
-                    pass
-                raise HTTPException(status_code=400, detail="Name required")
-            try:
-                # For SQLite, we need to fetch the result before committing
-                res = s.execute(insert(Department).values(name=name).returning(Department.id))
-                dept_id = res.scalar_one()  # Fetch BEFORE commit
-                s.commit()
-                try:
-                    logger.info(f"[departments] Successfully created department with id: {dept_id}")
-                except Exception:
-                    pass
-                return {"id": dept_id, "name": name}
-            except IntegrityError as e:
-                s.rollback()
-                try:
-                    logger.error(f"[departments] IntegrityError: {e}")
-                except Exception:
-                    pass
-                raise HTTPException(status_code=409, detail="Department name already exists")
-            except Exception as e:
-                s.rollback()
-                try:
-                    logger.error(f"[departments] Unexpected error: {e}")
-                    import traceback
-                    logger.error(f"[departments] Traceback: {traceback.format_exc()}")
-                except Exception:
-                    pass
-                raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-    except HTTPException:
-        raise
-    except Exception as e:
-        try:
-            logger.error(f"[departments] Outer exception: {e}")
-            import traceback
-            logger.error(f"[departments] Traceback: {traceback.format_exc()}")
-        except Exception:
-            pass
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+            res = s.execute(insert(Department).values(name=name).returning(Department.id))
+            s.commit()
+            return {"id": res.scalar_one(), "name": name}
+        except IntegrityError:
+            s.rollback()
+            raise HTTPException(status_code=409, detail="Department name already exists")
 
 
 @router.patch("/{dept_id}")

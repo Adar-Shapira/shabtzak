@@ -1,6 +1,5 @@
 # backend/app/models/__init__.py
-# IMPORTANT: Use Base from app.db (not from .base) since all models import from app.db
-from app.db import Base
+from .base import Base
 
 # import all model modules so tables get registered on Base.metadata
 # (Adjust these imports to match the actual files you have)
