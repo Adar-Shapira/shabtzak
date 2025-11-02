@@ -5,8 +5,7 @@ from typing import List
 
 from fastapi import APIRouter, HTTPException, Path
 from pydantic import BaseModel, field_validator
-from sqlalchemy import delete, select, insert
-from sqlalchemy.orm import joinedload
+from sqlalchemy import delete, select, text
 
 from app.db import SessionLocal
 from app.models.mission import Mission
@@ -73,15 +72,34 @@ def put_requirements(mission_id: int, payload: List[RequirementIn]):
 
         # replace-all semantics
         s.execute(delete(MissionRequirement).where(MissionRequirement.mission_id == mission_id))
+        s.flush()  # Ensure delete is committed to database before inserts
+        
+        # Fix sequence if out of sync (prevents duplicate key errors)
+        try:
+            result = s.execute(text("SELECT MAX(id) FROM mission_requirements"))
+            max_id = result.scalar()
+            if max_id is not None:
+                # Check current sequence value
+                seq_result = s.execute(text("SELECT last_value FROM mission_requirements_id_seq"))
+                seq_value = seq_result.scalar()
+                if seq_value <= max_id:
+                    # Sequence is behind, fix it
+                    s.execute(text(f"SELECT setval('mission_requirements_id_seq', {max_id}, true)"))
+                    s.flush()  # Ensure sequence update is applied
+        except Exception as e:
+            # If sequence fix fails, log but continue (might not be a sequence table)
+            pass
+        
+        # Use ORM objects for better reliability
         for item in payload:
             if item.count > 0:
-                s.execute(
-                    insert(MissionRequirement).values(
-                        mission_id=mission_id,
-                        role_id=item.role_id,
-                        count=item.count,
-                    )
+                req = MissionRequirement(
+                    mission_id=mission_id,
+                    role_id=item.role_id,
+                    count=item.count,
                 )
+                s.add(req)
+        
         s.commit()
 
         # return fresh list

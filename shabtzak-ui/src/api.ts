@@ -310,6 +310,10 @@ export type PlannerWeights = {
   coassignment_repeat_penalty: number;
   rest_before_priority_per_hour: number;
   rest_after_priority_per_hour: number;
+  rest_warning_penalty: number;
+  rest_warning_double_penalty: number;
+  rest_equality_penalty_per_hour_diff: number;
+  short_slot_preference_for_rest: number;
 };
 
 export const DEFAULT_WEIGHTS: PlannerWeights = {
@@ -323,6 +327,10 @@ export const DEFAULT_WEIGHTS: PlannerWeights = {
   coassignment_repeat_penalty: 0.5,
   rest_before_priority_per_hour: -1.0,
   rest_after_priority_per_hour: -0.5,
+  rest_warning_penalty: 2.0,
+  rest_warning_double_penalty: 5.0,
+  rest_equality_penalty_per_hour_diff: 0.5,
+  short_slot_preference_for_rest: -1.0,
 };
 
 const WEIGHTS_STORAGE_KEY = "planner_weights";

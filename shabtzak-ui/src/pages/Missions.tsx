@@ -195,7 +195,7 @@ function MissionRequirementsEditor({ missionId, roles, initialTotal }: { mission
             return (
             <div key={idx} style={{ display: "grid", gridTemplateColumns: "auto auto auto auto 1fr", gap: 8, alignItems: "center" }}>
               <select
-                value={row.role_id}
+                value={row.role_id === "" ? "" : String(row.role_id)}
                 onChange={(e) => updateRow(idx, { role_id: e.target.value === "" ? "" : Number(e.target.value) })}
                 style={{
                   border: "1px solid #1f2937",
@@ -209,6 +209,9 @@ function MissionRequirementsEditor({ missionId, roles, initialTotal }: { mission
                   textAlign: "right",
                 }}
               >
+                <option value="" style={{ backgroundColor: "rgba(17, 24, 39, 0.95)", color: "#e5e7eb" }}>
+                  בחר תפקיד...
+                </option>
                 {availableRoles.map((r) => (
                   <option key={r.id} value={r.id} style={{ backgroundColor: "rgba(17, 24, 39, 0.95)", color: "#e5e7eb" }}>
                     {r.name}

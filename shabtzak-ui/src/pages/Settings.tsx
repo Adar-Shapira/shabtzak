@@ -87,6 +87,22 @@ export default function Settings() {
       label: "Rest After Priority (per hour)",
       description: "Negative value - lower values prevent the algorithm from creating a short rest period after the mission"
     },
+    rest_warning_penalty: {
+      label: "REST Warning Penalty",
+      description: "Penalty for assignments that result in exactly ~8 hours of rest (REST warning). Higher values discourage these assignments"
+    },
+    rest_warning_double_penalty: {
+      label: "Double REST Warning Penalty",
+      description: "Additional penalty for assignments that would create two consecutive ~8 hour rests. Higher values strongly discourage this pattern"
+    },
+    rest_equality_penalty_per_hour_diff: {
+      label: "Rest Equality Penalty (per hour difference)",
+      description: "Penalty for soldiers whose rest time differs significantly from the average. Helps ensure all soldiers get similar rest periods"
+    },
+    short_slot_preference_for_rest: {
+      label: "Short Slot Preference for REST (negative = reward)",
+      description: "Negative value - when a REST warning is unavoidable, this rewards assigning the soldier to shorter time slots (like 4-hour GUARD missions) instead of longer ones"
+    },
   };
 
   if (isLoading) {
