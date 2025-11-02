@@ -180,14 +180,14 @@ EIGHT_HOURS = timedelta(hours=8)
 # We minimize this score (lower = more preferred).
 # Tweak weights to taste; all are >= 0.
 WEIGHTS = {
-    "recent_gap_penalty_per_hour_missing": 2.0,     # strong penalty if < 8h
+    "recent_gap_penalty_per_hour_missing": 2.0,     # strong penalty if < 8h (overlap - should never happen)
     "same_mission_recent_penalty": 5.0,
     "mission_repeat_count_penalty": 1.0,
     "today_assignment_count_penalty": 3.0,
     "total_hours_window_penalty_per_hour": 0.08,
 
     # Make extra rest (beyond 8h) much more attractive, so under-rested soldiers keep resting now.
-    "recent_gap_boost_per_hour": -1.2,              # was -0.4
+    "recent_gap_boost_per_hour": -1.2,
 
     "slot_repeat_count_penalty": 0.75,
     "coassignment_repeat_penalty": 0.5,
@@ -196,24 +196,32 @@ WEIGHTS = {
     # Reward large 'gap before' (assign the most rested now) and avoid shrinking the 'gap after'.
     "rest_before_priority_per_hour": -1.0,          # favors candidates with larger rest before
     "rest_after_priority_per_hour": -0.5,           # disfavors creating a short next rest
+    
+    # NEW: Penalties for REST warnings (8h rest periods)
+    "rest_warning_penalty": 2.0,                     # Penalty for having exactly ~8h rest (REST warning)
+    "rest_warning_double_penalty": 5.0,              # Higher penalty for two consecutive ~8h rests
+    "rest_equality_penalty_per_hour_diff": 0.5,      # Penalty for unequal rest times between soldiers
+    "short_slot_preference_for_rest": -1.0,          # Prefer shorter slots when REST warning is unavoidable (negative = reward)
 }
 
 class SoldierStats:
     __slots__ = (
         "last_end_at",             # datetime | None
+        "second_last_end_at",      # datetime | None  # NEW: track second-to-last assignment
         "today_count",             # int
         "total_hours_window",      # float hours
         "mission_count",           # Dict[int, int]
         "recent_missions",         # set[int]
-        "slot_bucket_count",       # Dict[str, int]  # NEW
+        "slot_bucket_count",       # Dict[str, int]
     )
     def __init__(self):
         self.last_end_at = None
+        self.second_last_end_at = None  # NEW
         self.today_count = 0
         self.total_hours_window = 0.0
         self.mission_count = {}
         self.recent_missions = set()
-        self.slot_bucket_count = {}  # NEW
+        self.slot_bucket_count = {}
 
 def _fetch_recent_assignments(db: Session, day_start: datetime, day_end: datetime) -> List[Assignment]:
     window_start = day_start - timedelta(days=FAIRNESS_WINDOW_DAYS)
@@ -251,16 +259,33 @@ def _build_pair_counts(recent: List[Assignment]) -> Dict[int, Dict[int, int]]:
 
 def _build_soldier_stats(recent: List[Assignment], day_start: datetime, day_end: datetime) -> Dict[int, SoldierStats]:
     stats: Dict[int, SoldierStats] = {}
+    # First pass: collect all assignment ends that occur before day_start
+    assignments_before_day: Dict[int, List[datetime]] = {}
+    for a in recent:
+        sa = _naive(a.start_at)
+        ea = _naive(a.end_at)
+        s_id = a.soldier_id
+        
+        # Collect assignment ends that occur before day_start (sorted by end time)
+        if ea <= day_start:
+            if s_id not in assignments_before_day:
+                assignments_before_day[s_id] = []
+            assignments_before_day[s_id].append(ea)
+    
+    # Sort each soldier's assignment ends and take the last two
+    for s_id, ends in assignments_before_day.items():
+        ends.sort()
+        if len(ends) >= 1:
+            stats.setdefault(s_id, SoldierStats()).last_end_at = ends[-1]
+        if len(ends) >= 2:
+            stats.setdefault(s_id, SoldierStats()).second_last_end_at = ends[-2]
+    
+    # Second pass: build all other stats
     for a in recent:
         sa = _naive(a.start_at)
         ea = _naive(a.end_at)
         s_id = a.soldier_id
         st = stats.setdefault(s_id, SoldierStats())
-
-        # last_end_at: keep the latest assignment end strictly before day_start
-        if ea <= day_start:
-            if st.last_end_at is None or ea > st.last_end_at:
-                st.last_end_at = ea
 
         # today_count: overlaps the selected day
         if not (ea <= day_start or sa >= day_end):
@@ -290,41 +315,110 @@ def _overlap_seconds(a_start: datetime, a_end: datetime, b_start: datetime, b_en
         return (x_end - x_start).total_seconds()
     return 0.0
 
+def _is_near_8h_rest(gap: timedelta, tolerance_minutes: int = 10) -> bool:
+    """Check if a rest gap is approximately 8 hours (±tolerance)."""
+    gap_seconds = gap.total_seconds()
+    eight_hours_seconds = 8 * 3600
+    tolerance_seconds = tolerance_minutes * 60
+    return (eight_hours_seconds - tolerance_seconds) <= gap_seconds <= (eight_hours_seconds + tolerance_seconds)
+
+def _calculate_rest_gap(
+    prev_end: datetime,
+    start_at: datetime,
+    vacation_blocks: List[tuple[datetime, datetime]]
+) -> timedelta:
+    """Calculate rest gap subtracting vacation time (vacations don't count as rest)."""
+    gap = start_at - prev_end
+    vac_secs = 0.0
+    for (bs_utc, be_utc) in vacation_blocks:
+        vac_secs += _overlap_seconds(prev_end, start_at, bs_utc, be_utc)
+    if vac_secs > 0:
+        gap = timedelta(seconds=max(0.0, gap.total_seconds() - vac_secs))
+    return gap
+
 def _score_candidate(
     soldier: Soldier,
     mission_id: int,
     start_at: datetime,
     end_at: datetime,
     st: SoldierStats,
-    assigned_here: set[int],                                  # NEW
-    pair_counts: Dict[int, Dict[int, int]],                   # NEW
-    vacation_blocks: Dict[int, List[tuple[datetime, datetime]]],  # NEW
-    weights: Dict[str, float],                                # NEW: weights dict
+    assigned_here: set[int],
+    pair_counts: Dict[int, Dict[int, int]],
+    vacation_blocks: Dict[int, List[tuple[datetime, datetime]]],
+    weights: Dict[str, float],
+    all_stats: Optional[Dict[int, SoldierStats]] = None,  # NEW: for rest equality calculation
 ) -> float:
     score = 0.0
+    vac_blocks = vacation_blocks.get(soldier.id, [])
 
-    # 1) Rest maximization: prefer larger gap; penalize gaps under 8h
-    # If no last_end_at, treat as well-rested (small boost from duration itself).
+    # 1) Rest time calculation with vacation exclusion
+    # Calculate rest from last assignment
+    rest_from_last = None
+    rest_from_second_last = None
+    is_rest_warning = False
+    is_double_rest_warning = False
+    
     if st.last_end_at is not None:
-        gap = start_at - st.last_end_at
-        # subtract vacation time from the gap (vacation is NOT rest)
-        vac_secs = 0.0
-        for (bs_utc, be_utc) in vacation_blocks.get(soldier.id, []):
-            vac_secs += _overlap_seconds(st.last_end_at, start_at, bs_utc, be_utc)
-        if vac_secs > 0:
-            gap = timedelta(seconds=max(0.0, gap.total_seconds() - vac_secs))
-
+        gap = _calculate_rest_gap(st.last_end_at, start_at, vac_blocks)
+        rest_from_last = gap.total_seconds() / 3600.0
+        
         if gap < timedelta(0):
+            # OVERLAP - should never happen in strict mode, but penalize heavily
             missing_hours = abs(gap.total_seconds()) / 3600.0
             score += weights["recent_gap_penalty_per_hour_missing"] * (8.0 + missing_hours)
         elif gap < EIGHT_HOURS:
+            # Less than 8h - should never happen in strict mode
             missing = (EIGHT_HOURS - gap).total_seconds() / 3600.0
             score += weights["recent_gap_penalty_per_hour_missing"] * missing
+        elif _is_near_8h_rest(gap):
+            # REST warning: exactly ~8h rest
+            is_rest_warning = True
+            score += weights.get("rest_warning_penalty", 2.0)
+            
+            # Check if previous rest was also ~8h (double REST warning)
+            if st.second_last_end_at is not None:
+                prev_gap = _calculate_rest_gap(st.second_last_end_at, st.last_end_at, vac_blocks)
+                if _is_near_8h_rest(prev_gap):
+                    is_double_rest_warning = True
+                    score += weights.get("rest_warning_double_penalty", 5.0)
         else:
+            # More than 8h - good, reward extra rest
             extra = (gap - EIGHT_HOURS).total_seconds() / 3600.0
             score += weights["recent_gap_boost_per_hour"] * extra
+    
+    # Calculate rest from second-to-last assignment (for equality)
+    if st.second_last_end_at is not None:
+        gap_second = _calculate_rest_gap(st.second_last_end_at, start_at, vac_blocks)
+        rest_from_second_last = gap_second.total_seconds() / 3600.0
 
-    else:
+    # NEW: If REST warning is unavoidable, prefer shorter time slots
+    if is_rest_warning:
+        duration_hours = (end_at - start_at).total_seconds() / 3600.0
+        # Reward shorter slots (negative weight = reward)
+        score += weights.get("short_slot_preference_for_rest", -1.0) * (12.0 - duration_hours)  # Assuming max slot is ~12h
+    
+    # NEW: Rest equality - penalize if this soldier's rest is very different from average
+    if all_stats is not None and rest_from_last is not None:
+        # Calculate average rest time from all other soldiers
+        rest_times = []
+        for other_soldier_id, other_st in all_stats.items():
+            if other_soldier_id != soldier.id and other_st.last_end_at is not None:
+                # Calculate what the rest would be for this candidate time
+                other_gap = _calculate_rest_gap(
+                    other_st.last_end_at, 
+                    start_at, 
+                    vacation_blocks.get(other_soldier_id, [])
+                )
+                if other_gap >= timedelta(0):  # Only count non-overlapping rests
+                    rest_times.append(other_gap.total_seconds() / 3600.0)
+        
+        if rest_times:
+            avg_rest = sum(rest_times) / len(rest_times)
+            rest_diff = abs(rest_from_last - avg_rest)
+            # Penalize deviation from average rest time
+            score += weights.get("rest_equality_penalty_per_hour_diff", 0.5) * rest_diff
+
+    if st.last_end_at is None:
         # No recent work → tiny preference (negative penalty)
         score += weights["recent_gap_boost_per_hour"] * 4.0
 
@@ -334,14 +428,14 @@ def _score_candidate(
         count = st.mission_count.get(mission_id, 0)
         score += weights["mission_repeat_count_penalty"] * float(count)
 
-    # NEW: penalize repeating the same time-slot bucket (M/E/N)
+    # Penalize repeating the same time-slot bucket (M/E/N)
     bucket = _slot_bucket(start_at)
     if bucket:
         bucket_count = st.slot_bucket_count.get(bucket, 0)
         if bucket_count > 0:
             score += weights.get("slot_repeat_count_penalty", 0.75) * float(bucket_count)
 
-    # NEW: penalize repeated pairing with the same fellow soldiers in this window
+    # Penalize repeated pairing with the same fellow soldiers
     if assigned_here:
         pairs = pair_counts.get(soldier.id, {})
         for fellow_id in assigned_here:
@@ -355,24 +449,27 @@ def _score_candidate(
     # 4) Balance recent workload
     score += weights["total_hours_window_penalty_per_hour"] * float(st.total_hours_window)
 
-    # 5) Prefer longer rest before long shifts a bit more (optional small nudge)
-    duration_hours = (end_at - start_at).total_seconds() / 3600.0
-    score += 0.0 * duration_hours
-
     return score
 
 def _update_stats_after_assignment(st: SoldierStats, mission_id: int, start_at: datetime, end_at: datetime, day_start: datetime, day_end: datetime):
     # Update soldier stats in-memory after we place an assignment, so next picks are fair
     if end_at <= day_start:
+        # Assignment ends before the day we're planning - update last_end_at tracking
         if st.last_end_at is None or end_at > st.last_end_at:
+            # Shift current last_end_at to second_last_end_at before updating
+            if st.last_end_at is not None:
+                st.second_last_end_at = st.last_end_at
             st.last_end_at = end_at
+        elif st.second_last_end_at is None or end_at > st.second_last_end_at:
+            # Update second_last_end_at if it's more recent
+            st.second_last_end_at = end_at
     elif start_at < day_start and end_at > day_start:
         # crossing into day → last_end_at remains the latest before day_start
         pass
     else:
-        # assignment inside or after day_start
-        if st.last_end_at is None or end_at > st.last_end_at:
-            st.last_end_at = end_at
+        # assignment inside or after day_start - don't update last_end_at/second_last_end_at
+        # as these track assignments before the planning day
+        pass
 
     # Today count increments if overlaps today
     if not (end_at <= day_start or start_at >= day_end):
@@ -388,7 +485,61 @@ def _update_stats_after_assignment(st: SoldierStats, mission_id: int, start_at: 
     # Mission rotation
     st.recent_missions.add(mission_id)
     st.mission_count[mission_id] = st.mission_count.get(mission_id, 0) + 1
+    
+    # Update slot bucket count
+    bucket = _slot_bucket(start_at)
+    if bucket:
+        st.slot_bucket_count[bucket] = st.slot_bucket_count.get(bucket, 0) + 1
 
+
+def _normalize_mission_name(name: str) -> str:
+    """Normalize mission name for comparison (lowercase, trim)."""
+    return name.lower().strip()
+
+def _parse_restrictions_string(restrictions_str: str) -> List[str]:
+    """Parse comma or semicolon separated restriction names."""
+    if not restrictions_str:
+        return []
+    # Replace semicolons with commas, then split
+    return [_normalize_mission_name(x) for x in restrictions_str.replace(';', ',').split(',') if x.strip()]
+
+def _build_restricted_pairs(
+    db: Session,
+    missions: List[Mission],
+    soldiers: List[Soldier]
+) -> set[tuple[int, int]]:
+    """
+    Build a set of (soldier_id, mission_id) pairs that are restricted.
+    Checks both:
+    1. soldier_mission_restrictions table
+    2. soldiers.restrictions string field (mission names)
+    """
+    restricted: set[tuple[int, int]] = set()
+    
+    # 1. Add table-based restrictions
+    table_restrictions = db.execute(
+        select(SoldierMissionRestriction.soldier_id, SoldierMissionRestriction.mission_id)
+    ).all()
+    restricted.update(table_restrictions)
+    
+    # 2. Add string-based restrictions (by mission name)
+    # Build a mission name -> mission_id mapping
+    mission_name_to_id: Dict[str, List[int]] = {}
+    for m in missions:
+        normalized_name = _normalize_mission_name(m.name)
+        mission_name_to_id.setdefault(normalized_name, []).append(m.id)
+    
+    # Check each soldier's restrictions string
+    for soldier in soldiers:
+        if not soldier.restrictions:
+            continue
+        restricted_names = _parse_restrictions_string(soldier.restrictions)
+        for name in restricted_names:
+            if name in mission_name_to_id:
+                for mission_id in mission_name_to_id[name]:
+                    restricted.add((soldier.id, mission_id))
+    
+    return restricted
 
 def _load_context(db: Session) -> dict:
     missions: List[Mission] = db.execute(
@@ -448,10 +599,15 @@ def _collect_candidates_for_slot(
 
         st = stats_by_soldier.setdefault(cand.id, SoldierStats())
 
+        # STRICT MODE: Block assignments with less than 8h rest, but allow REST warnings (~8h rest)
+        # This ensures no OVERLAP warnings (<8h rest), but REST warnings (~8h rest) are allowed
+        # (though minimized in scoring). Note: overlaps are already blocked above (line 546).
         if strict:
             occ_list = occupied_by_soldier.get(cand.id, [])
+            # Check for minimum 8h rest requirement (allows exactly 8h = REST warning)
+            # This blocks <8h rest (OVERLAP warnings) but allows >=8h rest (including REST warnings)
             if not _has_8h_rest_around(occ_list, start_at, end_at, EIGHT_HOURS):
-                continue
+                continue  # Less than 8h rest - never allow (this blocks OVERLAP warnings)
         # else: soft mode → allow <8h; warnings will be produced by your warnings endpoint
 
         base_score = _score_candidate(
@@ -460,6 +616,7 @@ def _collect_candidates_for_slot(
             pair_counts=pair_counts,
             vacation_blocks=vacation_blocks,
             weights=weights,
+            all_stats=stats_by_soldier,  # NEW: pass all stats for rest equality calculation
         )
 
         # Fairness add-on: push toward max-min rest across the day.
@@ -565,12 +722,8 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
         s_na, e_na = _naive(s_at), _naive(e_at)
         occupied_by_soldier.setdefault(sid, []).append((s_na, e_na))
 
-    # (Optional but recommended) Restrictions lookup
-    restricted_pairs: set[tuple[int, int]] = set(
-        db.execute(
-            select(SoldierMissionRestriction.soldier_id, SoldierMissionRestriction.mission_id)
-        ).all()
-    )
+    # Build restricted pairs from both table and string field
+    restricted_pairs = _build_restricted_pairs(db, ctx["missions"], ctx["all_soldiers"])
 
     mission_list = ctx["missions"]
     if req.mission_ids:
