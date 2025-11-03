@@ -17,6 +17,7 @@ from app.models.mission_slot import MissionSlot
 from app.models.mission_requirement import MissionRequirement
 from app.models.soldier import Soldier
 from app.models.soldier_mission_restriction import SoldierMissionRestriction
+from app.models.soldier_friendship import SoldierFriendship
 from app.models.vacation import Vacation
 
 import random
@@ -347,6 +348,8 @@ def _score_candidate(
     vacation_blocks: Dict[int, List[tuple[datetime, datetime]]],
     weights: Dict[str, float],
     all_stats: Optional[Dict[int, SoldierStats]] = None,  # NEW: for rest equality calculation
+    friends_map: Optional[Dict[int, set[int]]] = None,     # NEW: friendship data
+    not_friends_map: Optional[Dict[int, set[int]]] = None, # NEW: not-friendship data
 ) -> float:
     score = 0.0
     vac_blocks = vacation_blocks.get(soldier.id, [])
@@ -442,6 +445,14 @@ def _score_candidate(
             c = pairs.get(fellow_id, 0)
             if c > 0:
                 score += weights.get("coassignment_repeat_penalty", 0.5) * float(c)
+            
+            # Friendship scoring: prefer friends, discourage not_friends
+            if friends_map and soldier.id in friends_map and fellow_id in friends_map[soldier.id]:
+                # Reward being assigned with friends (negative = better score)
+                score += weights.get("friend_preference_bonus", -1.5)
+            if not_friends_map and soldier.id in not_friends_map and fellow_id in not_friends_map[soldier.id]:
+                # Penalize being assigned with not_friends (positive = worse score, but don't block)
+                score += weights.get("not_friend_penalty", 3.0)
 
     # 3) Balance intra-day load
     score += weights["today_assignment_count_penalty"] * float(st.today_count)
@@ -541,6 +552,30 @@ def _build_restricted_pairs(
     
     return restricted
 
+def _build_friendship_maps(
+    db: Session,
+    soldiers: List[Soldier]
+) -> tuple[Dict[int, set[int]], Dict[int, set[int]]]:
+    """
+    Build maps of:
+    - friends_map: soldier_id -> set of friend_ids (status='friend')
+    - not_friends_map: soldier_id -> set of not_friend_ids (status='not_friend')
+    """
+    friendships = db.execute(
+        select(SoldierFriendship)
+    ).scalars().all()
+    
+    friends_map: Dict[int, set[int]] = {}
+    not_friends_map: Dict[int, set[int]] = {}
+    
+    for f in friendships:
+        if f.status == 'friend':
+            friends_map.setdefault(f.soldier_id, set()).add(f.friend_id)
+        elif f.status == 'not_friend':
+            not_friends_map.setdefault(f.soldier_id, set()).add(f.friend_id)
+    
+    return friends_map, not_friends_map
+
 def _load_context(db: Session) -> dict:
     missions: List[Mission] = db.execute(
         select(Mission).options(
@@ -579,6 +614,8 @@ def _collect_candidates_for_slot(
     assigned_here: set[int],                                  
     pair_counts: Dict[int, Dict[int, int]],
     weights: Dict[str, float],                                # NEW: weights dict
+    friends_map: Dict[int, set[int]],                         # NEW: friendship data
+    not_friends_map: Dict[int, set[int]],                    # NEW: not-friendship data
     shuffle_mode: bool = False,
     rng: Optional[random.Random] = None,                   
 ) -> List[tuple[float, int, Soldier]]:
@@ -617,6 +654,8 @@ def _collect_candidates_for_slot(
             vacation_blocks=vacation_blocks,
             weights=weights,
             all_stats=stats_by_soldier,  # NEW: pass all stats for rest equality calculation
+            friends_map=friends_map,
+            not_friends_map=not_friends_map,
         )
 
         # Fairness add-on: push toward max-min rest across the day.
@@ -724,6 +763,9 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
 
     # Build restricted pairs from both table and string field
     restricted_pairs = _build_restricted_pairs(db, ctx["missions"], ctx["all_soldiers"])
+    
+    # Build friendship maps
+    friends_map, not_friends_map = _build_friendship_maps(db, ctx["all_soldiers"])
 
     mission_list = ctx["missions"]
     if req.mission_ids:
@@ -858,6 +900,8 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
                         assigned_here=assigned_here,            # NEW
                         pair_counts=pair_counts,                # NEW
                         weights=active_weights,                 # NEW: pass weights
+                        friends_map=friends_map,                # NEW: friendship data
+                        not_friends_map=not_friends_map,         # NEW: not-friendship data
                         shuffle_mode=req.shuffle,                # NEW
                         rng=rng if req.shuffle else None,        # NEW
                     )
@@ -1077,6 +1121,8 @@ def fill(req: FillRequest, db: Session = Depends(get_db)):
                         assigned_here=assigned_here,            # NEW
                         pair_counts=pair_counts,                # NEW
                         weights=active_weights,                 # NEW: pass weights
+                        friends_map=friends_map,                # NEW: friendship data
+                        not_friends_map=not_friends_map,         # NEW: not-friendship data
                         shuffle_mode=req.shuffle,                # NEW
                         rng=rng if req.shuffle else None,        # NEW
                     )

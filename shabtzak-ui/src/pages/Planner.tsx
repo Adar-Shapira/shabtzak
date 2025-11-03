@@ -22,6 +22,7 @@ import {
   type SavedPlan,
   type SavedPlanDetail,
   type SavedPlanData,
+  getSoldierFriendships,
 } from "../api";
 
 import Modal from "../components/Modal";
@@ -180,6 +181,14 @@ function WarningPill({ type, color }: { type: string; color?: "red" | "orange" |
       ? { color: "#d97706" } // orange-600 used in modal
       : { color: "#374151" }; // gray-700 fallback (for RESTRICTED)
 
+  // Map warning types to Hebrew text
+  const typeText: Record<string, string> = {
+    "OVERLAP": "חפיפה",
+    "REST": "מנוחה",
+    "RESTRICTED": "הגבלה",
+    "NOT_FRIENDS": "לא חברים",
+  };
+
   return (
     <span
       style={{
@@ -193,7 +202,7 @@ function WarningPill({ type, color }: { type: string; color?: "red" | "orange" |
         lineHeight: 1.3,
       }}
     >
-      {type}
+      {typeText[type] || type}
     </span>
   );
 }
@@ -869,7 +878,7 @@ async function shufflePlanner() {
    * (pendingAssignmentId) would create an OVERLAP or <8h REST issue
    * based on the current day's rows in memory.
    */
-  function computeCandidateWarnings(s: Soldier): Array<{ text: string; color: "red" | "orange" }> {
+  function computeCandidateWarnings(s: Soldier): Array<{ text: string; color: "red" | "orange" | "gray" }> {
     // Determine the candidate window (ms) for the slot being assigned
     let candStart: number | null = null;
     let candEnd: number | null = null;
@@ -932,7 +941,7 @@ async function shufflePlanner() {
       }
     }
 
-    const out: Array<{ text: string; color: "red" | "orange" }> = [];
+    const out: Array<{ text: string; color: "red" | "orange" | "gray" }> = [];
 
     if (hasOverlap) out.push({ text: "חפיפה", color: "red" });
 
@@ -941,9 +950,37 @@ async function shufflePlanner() {
       else if (minPositiveGap < H16) out.push({ text: "מנוחה", color: "orange" });
     }
 
-    // 3) RESTRICTED (orange) — based on the target mission of this slot
+    // 3) RESTRICTED (gray) — based on the target mission of this slot
     if (isSoldierRestrictedForMission(s, targetMissionId, targetMissionName)) {
-      out.push({ text: "מוגבל", color: "orange" });
+      out.push({ text: "הגבלה", color: "gray" });
+    }
+
+    // 4) NOT FRIENDS (gray) — check if any soldier already assigned to this slot is "not_friend" with candidate
+    if (candStart != null && candEnd != null) {
+      // Find all soldiers assigned to the same time slot (same mission, same start/end time)
+      const sameSlotSoldiers = rowsForWarnings.filter(r => {
+        if (!r.mission?.id || r.mission.id !== targetMissionId) return false;
+        const rStart = (r as any).start_epoch_ms ?? new Date(r.start_at).getTime();
+        const rEnd = (r as any).end_epoch_ms ?? new Date(r.end_at).getTime();
+        // Check if same time slot (allow small tolerance for time precision)
+        return Math.abs(rStart - candStart!) < 1000 && Math.abs(rEnd - candEnd!) < 1000 && r.soldier_id;
+      });
+
+      // Check if any soldier in the same slot is "not_friend" with the candidate
+      // Get candidate's friendships (loaded when modal opens)
+      const candidateFriendships = (s as any).friendships || [];
+      for (const row of sameSlotSoldiers) {
+        if (row.soldier_id && row.soldier_id !== s.id) {
+          // Check if candidate has "not_friend" relationship with this soldier
+          const hasNotFriend = candidateFriendships.some((f: any) => 
+            f.friend_id === row.soldier_id && f.status === 'not_friend'
+          );
+          if (hasNotFriend) {
+            out.push({ text: "לא חברים", color: "gray" });
+            break; // Only show once even if multiple not-friends
+          }
+        }
+      }
     }
 
     return out;
@@ -1233,7 +1270,18 @@ async function shufflePlanner() {
 
       const target = rows.find(r => r.id === assignmentId);
       if (!target) {
-        setVisibleCandidates(byRole);
+        // Load friendships for all soldiers
+        const soldiersWithFriendships = await Promise.all(
+          byRole.map(async (s) => {
+            try {
+              const friendshipsRes = await getSoldierFriendships(s.id);
+              return { ...s, friendships: friendshipsRes.friendships } as Soldier;
+            } catch {
+              return { ...s, friendships: [] } as Soldier;
+            }
+          })
+        );
+        setVisibleCandidates(soldiersWithFriendships);
         return;
       }
 
@@ -1246,7 +1294,15 @@ async function shufflePlanner() {
       const allowed: Soldier[] = [];
       for (const s of byRole) {
         const ok = await isSoldierAllowedForSlot(s.id, slotStartISO, slotEndISO);
-        if (ok) allowed.push(s);
+        if (ok) {
+          // Load friendships for this soldier
+          try {
+            const friendshipsRes = await getSoldierFriendships(s.id);
+            allowed.push({ ...s, friendships: friendshipsRes.friendships } as Soldier);
+          } catch {
+            allowed.push({ ...s, friendships: [] } as Soldier);
+          }
+        }
       }
 
       setVisibleCandidates(allowed);
@@ -1364,7 +1420,15 @@ async function shufflePlanner() {
         const allowed: Soldier[] = [];
         for (const s of roleFiltered) {
           const ok = await isSoldierAllowedForSlot(s.id, startIsoLocal, endIsoLocal);
-          if (ok) allowed.push(s);
+          if (ok) {
+            // Load friendships for this soldier
+            try {
+              const friendshipsRes = await getSoldierFriendships(s.id);
+              allowed.push({ ...s, friendships: friendshipsRes.friendships } as Soldier);
+            } catch {
+              allowed.push({ ...s, friendships: [] } as Soldier);
+            }
+          }
         }
 
         setVisibleCandidates(allowed);
@@ -2207,21 +2271,28 @@ async function shufflePlanner() {
                         if (!warns.length) return null;
                         return (
                           <span style={{ marginLeft: 6, fontWeight: 600, display: "inline-flex", gap: 6 }}>
-                            {warns.map((w, idx) => (
-                              <span
-                                key={idx}
-                                style={{
-                                  color: w.color === "red" ? "crimson" : "#d97706", // orange-600
-                                  border: "1px solid currentColor",
-                                  borderRadius: 4,
-                                  padding: "1px 6px",
-                                  fontSize: "0.85em",
-                                }}
-                                title={w.text === "מנוחה" ? (w.color === "red" ? "< 8 שעות" : "< 16 שעות") : w.text}
-                              >
-                                {w.text}
-                              </span>
-                            ))}
+                            {warns.map((w, idx) => {
+                              const colorMap: Record<"red" | "orange" | "gray", string> = {
+                                red: "crimson",
+                                orange: "#d97706",
+                                gray: "#374151",
+                              };
+                              return (
+                                <span
+                                  key={idx}
+                                  style={{
+                                    color: colorMap[w.color],
+                                    border: "1px solid currentColor",
+                                    borderRadius: 4,
+                                    padding: "1px 6px",
+                                    fontSize: "0.85em",
+                                  }}
+                                  title={w.text === "מנוחה" ? (w.color === "red" ? "< 8 שעות" : "< 16 שעות") : w.text}
+                                >
+                                  {w.text}
+                                </span>
+                              );
+                            })}
                           </span>
                         );
                       })()}
@@ -2677,11 +2748,13 @@ async function shufflePlanner() {
                             const coloredApi: Array<{ type: string; color?: "red" | "orange" | "gray" }> =
                               apiWarnings.map((w) => {
                                 const levelColor =
-                                  w.level === "RED" ? "red" : w.level === "ORANGE" ? "orange" : undefined;
+                                  w.level === "RED" ? "red" : w.level === "ORANGE" ? "orange" : w.level === "GRAY" ? "gray" : undefined;
                                 return {
                                   type: w.type,
-                                  // RESTRICTED uses ORANGE level from API, not gray
-                                  color: w.type === "RESTRICTED" ? (w.level === "ORANGE" ? "orange" : undefined) : levelColor,
+                                  // RESTRICTED and NOT_FRIENDS are gray
+                                  color: (w.type === "RESTRICTED" || w.type === "NOT_FRIENDS") 
+                                    ? "gray"
+                                    : levelColor,
                                 };
                               });
 

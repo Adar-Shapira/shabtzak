@@ -13,6 +13,7 @@ from .vacation import Vacation
 from .department import Department
 from .mission_requirement import MissionRequirement
 from .soldier_mission_restriction import SoldierMissionRestriction
+from .soldier_friendship import SoldierFriendship
 from .saved_plan import SavedPlan
 
 

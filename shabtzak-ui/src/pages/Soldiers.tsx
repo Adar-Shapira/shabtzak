@@ -9,7 +9,7 @@ import CloseIcon from "@mui/icons-material/Close";
 import { api } from "../api";
 import Modal from "../components/Modal";
 import { useDisclosure } from "../hooks/useDisclosure";
-import { listMissions, getSoldierMissionRestrictions, putSoldierMissionRestrictions, type Mission } from "../api";
+import { listMissions, getSoldierMissionRestrictions, putSoldierMissionRestrictions, type Mission, getSoldierFriendships, updateSoldierFriendships, type Friendship } from "../api";
 import SoldierHistoryModal from "../components/SoldierHistoryModal";
 import VacationsModal from "../components/VacationsModal";
 import { useSidebar } from "../contexts/SidebarContext";
@@ -303,6 +303,13 @@ export default function SoldiersPage() {
     const restrDlg = useDisclosure(false);
     const [restrSoldier, setRestrSoldier] = useState<Soldier | null>(null);
 
+    // Friendships
+    const friendshipDlg = useDisclosure(false);
+    const [friendshipSoldier, setFriendshipSoldier] = useState<Soldier | null>(null);
+    const [friendshipList, setFriendshipList] = useState<Friendship[]>([]);
+    const [savingFriendship, setSavingFriendship] = useState<number | null>(null);
+    const [friendshipSearchQuery, setFriendshipSearchQuery] = useState<string>("");
+
     const [historyFor, setHistoryFor] = useState<{ id: number; name: string } | null>(null)
 
     // Confirmation modal for deletions
@@ -328,6 +335,82 @@ export default function SoldiersPage() {
     const closeRestrictions = () => {
     setRestrSoldier(null);
     restrDlg.close();
+    };
+
+    const openFriendships = async (s: Soldier) => {
+        setErr(null);
+        setFriendshipSoldier(s);
+        try {
+            const res = await getSoldierFriendships(s.id);
+            setFriendshipList(res.friendships);
+        } catch (e: any) {
+            setErr(e.message || "Failed to load friendships");
+            setFriendshipList([]);
+        }
+        friendshipDlg.open();
+    };
+
+    const closeFriendships = () => {
+        setFriendshipSoldier(null);
+        setFriendshipList([]);
+        setFriendshipSearchQuery("");
+        friendshipDlg.close();
+    };
+
+    const saveFriendships = async () => {
+        if (!friendshipSoldier) return;
+        setSavingFriendship(friendshipSoldier.id);
+        setErr(null);
+        try {
+            // Ensure all friendships have the correct soldier_id
+            const friendshipsToSave = friendshipList.map(f => ({
+                ...f,
+                soldier_id: friendshipSoldier.id,
+            }));
+            await updateSoldierFriendships(friendshipSoldier.id, friendshipsToSave);
+            closeFriendships();
+            // Reload soldiers to get updated data
+            await loadAll();
+        } catch (e: any) {
+            setErr(e.message || "Failed to save friendships");
+        } finally {
+            setSavingFriendship(null);
+        }
+    };
+
+    const updateFriendshipStatus = async (friendId: number, status: 'friend' | 'not_friend' | null) => {
+        if (!friendshipSoldier) return;
+        
+        // Update local state immediately
+        const updatedList = friendshipList.map(f => {
+            if (f.friend_id === friendId) {
+                // If clicking the same status, toggle to neutral (null)
+                if (f.status === status) {
+                    return { ...f, status: null };
+                }
+                // Otherwise set the new status
+                return { ...f, status };
+            }
+            return f;
+        });
+        
+        setFriendshipList(updatedList);
+        
+        // Auto-save the changes
+        try {
+            setSavingFriendship(friendshipSoldier.id);
+            const friendshipsToSave = updatedList.map(f => ({
+                ...f,
+                soldier_id: friendshipSoldier.id,
+            }));
+            await updateSoldierFriendships(friendshipSoldier.id, friendshipsToSave);
+        } catch (e: any) {
+            setErr(e.message || "Failed to save friendships");
+            // Revert on error
+            setFriendshipList(friendshipList);
+        } finally {
+            setSavingFriendship(null);
+        }
     };
 
     useEffect(() => {
@@ -1161,6 +1244,7 @@ export default function SoldiersPage() {
                                     <th style={{ width: 280 }}>תפקיד</th>
                                     <th style={{ width: 180 }}>מחלקה</th>
                                     <th style={{ width: 240 }}>הגבלות</th>
+                                    <th style={{ width: 120 }}>חברים</th>
                                     <th style={{ width: 120 }}>חופשות</th>
                                     <th style={{ width: 120 }}>היסטוריה</th>
                                     <th style={{ width: 160 }}>פעולות</th>
@@ -1259,6 +1343,11 @@ export default function SoldiersPage() {
                                             ) : (
                                             <span style={{ opacity: 0.6 }}>(אין)</span>
                                             )}
+                                        </td>
+
+                                        {/* friendships */}
+                                        <td>
+                                            <button onClick={() => openFriendships(s)}>חברים</button>
                                         </td>
 
                                         {/* vacations */}
@@ -1381,6 +1470,129 @@ export default function SoldiersPage() {
                         onClose={() => setHistoryFor(null)}
                     />
                     )}
+
+                    {/* Friendships Modal */}
+                    <Modal
+                        open={friendshipDlg.isOpen}
+                        onClose={closeFriendships}
+                        title={friendshipSoldier ? `חברים — ${friendshipSoldier.name}` : "חברים"}
+                        maxWidth={720}
+                    >
+                        {!friendshipSoldier ? (
+                            <div style={{ opacity: 0.7 }}>לא נבחר חייל</div>
+                        ) : (
+                            <div style={{ padding: "16px 0" }}>
+                                {/* Search Bar */}
+                                <div style={{ marginBottom: 16 }}>
+                                    <input
+                                        type="text"
+                                        value={friendshipSearchQuery}
+                                        onChange={(e) => setFriendshipSearchQuery(e.target.value)}
+                                        placeholder="חפש חייל..."
+                                        style={{
+                                            width: "100%",
+                                            padding: "10px 12px",
+                                            borderRadius: 8,
+                                            border: "1px solid #1f2937",
+                                            backgroundColor: "rgba(255,255,255,0.03)",
+                                            color: "#e5e7eb",
+                                            fontSize: 14,
+                                            direction: "rtl",
+                                            textAlign: "right",
+                                        }}
+                                    />
+                                </div>
+                                
+                                <div>
+                                    {friendshipList.length === 0 ? (
+                                        <div style={{ opacity: 0.7, padding: 16, textAlign: "center" }}>
+                                            אין חיילים נוספים
+                                        </div>
+                                    ) : (
+                                        <table width="100%" cellPadding={8} style={{ borderCollapse: "collapse" }}>
+                                            <thead>
+                                                <tr style={{ borderBottom: "1px solid #1f2937" }}>
+                                                    <th style={{ textAlign: "right", padding: "8px 12px" }}>שם</th>
+                                                    <th style={{ textAlign: "center", padding: "8px 12px", width: 120 }}>חבר</th>
+                                                    <th style={{ textAlign: "center", padding: "8px 12px", width: 120 }}>לא חבר</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {friendshipList
+                                                    .filter(f => 
+                                                        !friendshipSearchQuery || 
+                                                        f.friend_name.toLowerCase().includes(friendshipSearchQuery.toLowerCase())
+                                                    )
+                                                    .map((f) => (
+                                                        <tr key={f.friend_id} style={{ borderTop: "1px solid #1f2937" }}>
+                                                            <td style={{ padding: "8px 12px", textAlign: "right" }}>
+                                                                {f.friend_name}
+                                                            </td>
+                                                            <td style={{ padding: "8px 12px", textAlign: "center" }}>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => updateFriendshipStatus(f.friend_id, 'friend')}
+                                                                    style={{
+                                                                        fontSize: "24px",
+                                                                        padding: "4px 12px",
+                                                                        border: f.status === 'friend' ? "2px solid #10b981" : "1px solid #1f2937",
+                                                                        borderRadius: 6,
+                                                                        backgroundColor: f.status === 'friend' ? "rgba(16, 185, 129, 0.2)" : "transparent",
+                                                                        cursor: "pointer",
+                                                                        transition: "all 0.2s",
+                                                                        color: f.status === 'friend' ? "#10b981" : "#9ca3af",
+                                                                    }}
+                                                                    title="חבר"
+                                                                >
+                                                                    😊
+                                                                </button>
+                                                            </td>
+                                                            <td style={{ padding: "8px 12px", textAlign: "center" }}>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => updateFriendshipStatus(f.friend_id, 'not_friend')}
+                                                                    style={{
+                                                                        fontSize: "24px",
+                                                                        padding: "4px 12px",
+                                                                        border: f.status === 'not_friend' ? "2px solid #ef4444" : "1px solid #1f2937",
+                                                                        borderRadius: 6,
+                                                                        backgroundColor: f.status === 'not_friend' ? "rgba(239, 68, 68, 0.2)" : "transparent",
+                                                                        cursor: "pointer",
+                                                                        transition: "all 0.2s",
+                                                                        color: f.status === 'not_friend' ? "#ef4444" : "#9ca3af",
+                                                                    }}
+                                                                    title="לא חבר"
+                                                                >
+                                                                    😞
+                                                                </button>
+                                                            </td>
+                                                        </tr>
+                                                    ))}
+                                                {friendshipList.filter(f => 
+                                                    !friendshipSearchQuery || 
+                                                    f.friend_name.toLowerCase().includes(friendshipSearchQuery.toLowerCase())
+                                                ).length === 0 && (
+                                                    <tr>
+                                                        <td colSpan={3} style={{ padding: 16, textAlign: "center", opacity: 0.7 }}>
+                                                            לא נמצאו תוצאות
+                                                        </td>
+                                                    </tr>
+                                                )}
+                                            </tbody>
+                                        </table>
+                                    )}
+                                </div>
+                                {savingFriendship === friendshipSoldier.id && (
+                                    <div style={{ marginTop: 12, textAlign: "center", fontSize: 14, opacity: 0.7 }}>
+                                        שומר...
+                                    </div>
+                                )}
+                                <div style={{ marginTop: 16, display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                                    <button onClick={closeFriendships}>סגור</button>
+                                </div>
+                            </div>
+                        )}
+                    </Modal>
 
                 </>
             )}

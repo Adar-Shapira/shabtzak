@@ -3,7 +3,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel
 
 
-WarningType = Literal["RESTRICTED", "OVERLAP", "REST"]
+WarningType = Literal["RESTRICTED", "OVERLAP", "REST", "NOT_FRIENDS"]
 
 class WarningItem(BaseModel):
     type: WarningType

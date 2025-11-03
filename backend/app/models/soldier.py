@@ -31,4 +31,11 @@ class Soldier(Base):
         back_populates="soldier",
         cascade="all, delete-orphan"
     )
+    
+    friendships = relationship(
+        "SoldierFriendship",
+        foreign_keys="SoldierFriendship.soldier_id",
+        back_populates="soldier",
+        cascade="all, delete-orphan"
+    )
 

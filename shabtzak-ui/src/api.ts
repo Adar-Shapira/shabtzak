@@ -124,6 +124,7 @@ export type Soldier = {
   name: string;
   department_id?: number | null;
   roles?: Array<{ id: number; name: string }>;
+  friendships?: Friendship[];
 };
 
 export async function listSoldiers(): Promise<Soldier[]> {
@@ -167,10 +168,38 @@ export async function getSoldierMissionHistory(soldierId: number): Promise<Missi
   return res.data as MissionHistoryItem[]
 }
 
+// --- Friendships ----------------------------------------------------------
+
+export type Friendship = {
+  soldier_id: number;
+  friend_id: number;
+  friend_name: string;
+  status: 'friend' | 'not_friend' | null;
+};
+
+export async function getSoldierFriendships(soldierId: number): Promise<{ friendships: Friendship[] }> {
+  const { data } = await api.get(`/soldiers/${soldierId}/friendships`);
+  return data;
+}
+
+export async function updateSoldierFriendships(
+  soldierId: number,
+  friendships: Friendship[]
+): Promise<{ message: string }> {
+  const { data } = await api.put(`/soldiers/${soldierId}/friendships`, {
+    friendships: friendships.map(f => ({
+      soldier_id: f.soldier_id,
+      friend_id: f.friend_id,
+      status: f.status,
+    })),
+  });
+  return data;
+}
+
 // keep your existing imports and api instance
 
 export type PlannerWarning = {
-  type: "RESTRICTED" | "OVERLAP" | "REST";
+  type: "RESTRICTED" | "OVERLAP" | "REST" | "NOT_FRIENDS";
   level?: 'RED' | 'ORANGE';
   soldier_id: number;
   soldier_name: string;

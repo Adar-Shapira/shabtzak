@@ -142,7 +142,7 @@ restricted_cte AS (
     ))
   )
 )
--- RESTRICTED (keep same; orange)
+-- RESTRICTED (gray)
 SELECT
   'RESTRICTED' AS type,
   s.id   AS soldier_id,
@@ -153,7 +153,7 @@ SELECT
   (x.end_at) AS end_at_local,
   NULL::text AS details,
   x.assignment_id AS assignment_id,
-  'ORANGE' AS level
+  'GRAY' AS level
 FROM restricted_cte x
 JOIN soldiers s ON s.id = x.soldier_id
 JOIN missions m ON m.id = x.mission_id
@@ -235,6 +235,73 @@ SELECT
 FROM single_eight_cte d
 JOIN soldiers s ON s.id = d.soldier_id
 JOIN missions m ON m.id = d.mission_id
+
+UNION ALL
+
+-- NOT FRIENDS (orange): two "not_friend" soldiers assigned together in the same time slot
+-- Return warnings for both soldiers in the pair
+SELECT
+  'NOT_FRIENDS' AS type,
+  s1.id      AS soldier_id,
+  s1.name    AS soldier_name,
+  m.id       AS mission_id,
+  m.name     AS mission_name,
+  (b1.start_at) AS start_at_local,
+  (b1.end_at) AS end_at_local,
+  ('Assigned with ' || s2.name) AS details,
+  b1.assignment_id AS assignment_id,
+  'GRAY' AS level
+FROM base b1
+JOIN assignments a1 ON a1.id = b1.assignment_id
+JOIN assignments a2 ON 
+  a2.mission_id = a1.mission_id
+  AND a2.start_at = a1.start_at
+  AND a2.end_at = a1.end_at
+  AND a2.soldier_id != a1.soldier_id
+  AND (a2.start_at::date = :day_date)  -- Ensure a2 also starts on the selected day
+JOIN soldiers s1 ON s1.id = a1.soldier_id
+JOIN soldiers s2 ON s2.id = a2.soldier_id
+JOIN missions m ON m.id = a1.mission_id
+WHERE EXISTS (
+  SELECT 1 FROM soldier_friendships sf1
+  WHERE sf1.soldier_id = a1.soldier_id 
+    AND sf1.friend_id = a2.soldier_id
+    AND sf1.status = 'not_friend'
+)
+AND a1.id < a2.id  -- Avoid duplicate pairs (each pair appears once)
+
+UNION ALL
+
+-- Also return the warning for the other soldier (s2) in the pair
+SELECT
+  'NOT_FRIENDS' AS type,
+  s2.id      AS soldier_id,
+  s2.name    AS soldier_name,
+  m.id       AS mission_id,
+  m.name     AS mission_name,
+  (b2.start_at) AS start_at_local,
+  (b2.end_at) AS end_at_local,
+  ('Assigned with ' || s1.name) AS details,
+  b2.assignment_id AS assignment_id,
+  'GRAY' AS level
+FROM base b2
+JOIN assignments a2 ON a2.id = b2.assignment_id
+JOIN assignments a1 ON 
+  a1.mission_id = a2.mission_id
+  AND a1.start_at = a2.start_at
+  AND a1.end_at = a2.end_at
+  AND a1.soldier_id != a2.soldier_id
+  AND (a1.start_at::date = :day_date)  -- Ensure a1 also starts on the selected day
+JOIN soldiers s2 ON s2.id = a2.soldier_id
+JOIN soldiers s1 ON s1.id = a1.soldier_id
+JOIN missions m ON m.id = a2.mission_id
+WHERE EXISTS (
+  SELECT 1 FROM soldier_friendships sf2
+  WHERE sf2.soldier_id = a2.soldier_id 
+    AND sf2.friend_id = a1.soldier_id
+    AND sf2.status = 'not_friend'
+)
+AND a1.id < a2.id  -- Same condition to avoid duplicates
 
 ORDER BY type ASC, soldier_name ASC, start_at_local DESC
 """
