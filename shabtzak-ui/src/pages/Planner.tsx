@@ -1258,17 +1258,60 @@ async function shufflePlanner() {
 
   function openChangeModalForEmptySlot(
     missionId: number,
-    startLabel: string,    // "YYYY-MM-DD HH:MM"
-    endLabel: string,      // "YYYY-MM-DD HH:MM"
+    startLabel: string,    // "HH:MM - DD/MM"
+    endLabel: string,      // "HH:MM - DD/MM"
     roleName?: string | null,
     roleId?: number | null
   ) {
     if (locked) return;
-    const startHHMM = startLabel.slice(-5);
-    const endHHMM   = endLabel.slice(-5);
+    
+    // Parse labels in format "HH:MM - DD/MM"
+    // Extract time part (first 5 characters before " - ")
+    const parseLabel = (label: string): { time: string; dayMonth: string } => {
+      const match = label.match(/^(\d{2}:\d{2})\s*-\s*(\d{2}\/\d{2})$/);
+      if (match) {
+        return { time: match[1], dayMonth: match[2] };
+      }
+      // Fallback: try to extract time (last 5 chars before any space-dash-space)
+      const timeMatch = label.match(/^(\d{2}:\d{2})/);
+      const dateMatch = label.match(/(\d{2}\/\d{2})$/);
+      return {
+        time: timeMatch ? timeMatch[1] : "00:00",
+        dayMonth: dateMatch ? dateMatch[1] : day.split("-").slice(1, 3).reverse().join("/")
+      };
+    };
 
-    const startIsoLocal = startLabel.replace(" ", "T") + ":00";
-    const endIsoLocal   = endLabel.replace(" ", "T") + ":00";
+    const startParsed = parseLabel(startLabel);
+    const endParsed = parseLabel(endLabel);
+
+    // Convert DD/MM to YYYY-MM-DD by matching against current day or next day
+    const convertDayMonthToFullDate = (dayMonth: string): string => {
+      const [d, m] = dayMonth.split("/").map(Number);
+      const currentDate = day.split("-").map(Number);
+      const nextDayStr = shiftDay(day, 1);
+      const nextDate = nextDayStr.split("-").map(Number);
+      
+      // Check if it matches current day
+      if (d === currentDate[2] && m === currentDate[1]) {
+        return day;
+      }
+      // Check if it matches next day (for overnight slots)
+      if (d === nextDate[2] && m === nextDate[1]) {
+        return nextDayStr;
+      }
+      // Fallback: assume current day and construct YYYY-MM-DD
+      return `${currentDate[0]}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    };
+
+    const startDayISO = convertDayMonthToFullDate(startParsed.dayMonth);
+    const endDayISO = convertDayMonthToFullDate(endParsed.dayMonth);
+
+    // Build ISO strings: "YYYY-MM-DDTHH:MM:00"
+    const startIsoLocal = `${startDayISO}T${startParsed.time}:00`;
+    const endIsoLocal = `${endDayISO}T${endParsed.time}:00`;
+
+    const startHHMM = startParsed.time;
+    const endHHMM = endParsed.time;
 
     setPendingEmptySlot({
       missionId,
