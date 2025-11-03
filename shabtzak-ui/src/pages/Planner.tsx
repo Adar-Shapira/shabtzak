@@ -41,6 +41,8 @@ import { getPlannerWarnings, type PlannerWarning, getPlannerWeights } from "../a
 import { listSoldierVacations, type Vacation } from "../api";
 import { useSidebar } from "../contexts/SidebarContext";
 import { useWarnings } from "../contexts/WarningsContext";
+import jsPDF from 'jspdf';
+import html2canvas from 'html2canvas';
 
 
 type FlatRosterItem = {
@@ -334,6 +336,11 @@ export default function Planner() {
   const [viewingPlan, setViewingPlan] = useState<SavedPlanDetail | null>(null);
   const [viewPlanLoading, setViewPlanLoading] = useState(false);
 
+  // Export modal states
+  const [exportModalOpen, setExportModalOpen] = useState(false);
+  const [exportDays, setExportDays] = useState<number>(3);
+  const [exportFormat, setExportFormat] = useState<'csv' | 'pdf'>('csv');
+
   const [pendingEmptySlot, setPendingEmptySlot] = useState<null | {
     missionId: number;
     roleId: number | null;      // if you want role-aware empty slots later
@@ -546,11 +553,11 @@ async function shufflePlanner() {
     return `${yy}-${mm}-${dd}`;
   }
 
-  async function exportCsv() {
+  async function exportCsv(numDays: number = 3) {
     setBusy(true);
     try {
-      // Days: selected day and the previous two, oldest → newest
-      const daysISO = [0, -1, -2].map((n) => shiftDay(day, n)).reverse();
+      // Days: selected day and previous days (numDays-1), oldest → newest
+      const daysISO = Array.from({ length: numDays }, (_, i) => shiftDay(day, -numDays + 1 + i)).reverse();
 
       // Labels for headers: dd/MM format - prefix with = to force text in Excel
       const dayLabel = (iso: string) => {
@@ -561,7 +568,7 @@ async function shufflePlanner() {
       };
       const dayHeaders = daysISO.map(dayLabel);
 
-      // Fetch rosters for the 3 days
+      // Fetch rosters for the selected days
       const responses = await Promise.all(
         daysISO.map((d) =>
           api
@@ -683,8 +690,6 @@ async function shufflePlanner() {
         return s;
       };
 
-      const reversedDaysISO = [...daysISO].reverse();
-      
       // Build CSV rows
       const lines: string[] = [];
       lines.push(header.map(esc).join(","));
@@ -712,7 +717,7 @@ async function shufflePlanner() {
 
         for (let i = 0; i < maxRows; i++) {
           const cells = [
-            ...reversedDaysISO.map((d) => (r.byDay[d]?.[i] ?? "")),
+            ...daysISO.slice().reverse().map((d) => (r.byDay[d]?.[i] ?? "")),
             r.role,
             currentSlotRowCount === 0 ? r.hours : "",
             currentSlotRowCount === 0 ? r.mission : "",
@@ -740,6 +745,280 @@ async function shufflePlanner() {
       URL.revokeObjectURL(url);
     } catch (e: any) {
       alert(humanError(e, "Failed to export CSV"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function exportPdf(numDays: number = 3) {
+    setBusy(true);
+    try {
+      // Days: selected day and previous days (numDays-1), oldest → newest
+      const daysISO = Array.from({ length: numDays }, (_, i) => shiftDay(day, -numDays + 1 + i)).reverse();
+
+      // Labels for headers: dd/MM format
+      const dayLabel = (iso: string) => {
+        const [, m, d] = iso.split("-").map(Number);
+        const dd = String(d).padStart(2, "0");
+        const mm = String(m).padStart(2, "0");
+        return `${dd}.${mm}`;
+      };
+      const dayHeaders = daysISO.map(dayLabel);
+
+      // Fetch rosters for the selected days
+      const responses = await Promise.all(
+        daysISO.map((d) =>
+          api
+            .get<FlatRosterResp>("/assignments/roster", { params: { day: d } })
+            .then((r) => ({ dayISO: d, items: r.data.items }))
+        )
+      );
+
+      // Helper: HH:MM taken verbatim from the timestamp string (no TZ conversion)
+      const hhmmFrom = (isoLike: string) => {
+        if (typeof isoLike === "string") {
+          const s = isoLike.replace(" ", "T");
+          const m = s.match(/T(\d{2}):(\d{2})/);
+          if (m) return `${m[1]}:${m[2]}`;
+        }
+        try {
+          return new Date(isoLike).toISOString().slice(11, 16);
+        } catch {
+          return "00:00";
+        }
+      };
+
+      // Parse "HH:MM-HH:MM" -> minutes since midnight for start & end
+      const parseHoursToMinutes = (hours: string) => {
+        const [startStr, endStr] = hours.split("-");
+        const [sh, sm] = (startStr || "00:00").split(":").map(Number);
+        const [eh, em] = (endStr || "00:00").split(":").map(Number);
+        const startMin = (sh || 0) * 60 + (sm || 0);
+        const endMinRaw = (eh || 0) * 60 + (em || 0);
+        const endMin = endMinRaw < startMin ? endMinRaw + 24 * 60 : endMinRaw;
+        return { startMin, endMin };
+      };
+
+      // Priority for Role sorting
+      const rolePriority = (role: string) => {
+        const r = (role || "").toLowerCase();
+        if (r === "commander") return 0;
+        if (r === "driver") return 1;
+        if (r === "officer") return 2;
+        if (r.trim() === "") return 9;
+        return 3;
+      };
+
+      type RowRec = {
+        mission: string;
+        role: string;
+        hours: string;
+        byDay: Record<string, string[]>;
+        startMin: number;
+        endMin: number;
+      };
+
+      const rowsMap = new Map<string, RowRec>();
+
+      for (const resp of responses) {
+        for (const it of resp.items) {
+          const mission = it.mission?.name ?? "";
+          const role = it.role ?? "";
+
+          const startIsoLocal = it.start_local || it.start_at;
+          const endIsoLocal = it.end_local || it.end_at;
+
+          const startHM = hhmmFrom(startIsoLocal);
+          const endHM = hhmmFrom(endIsoLocal);
+          const hours = `${startHM}-${endHM}`;
+
+          const key = `${mission}__${role}__${hours}`;
+          if (!rowsMap.has(key)) {
+            const { startMin, endMin } = parseHoursToMinutes(hours);
+            rowsMap.set(key, {
+              mission,
+              role,
+              hours,
+              byDay: {},
+              startMin,
+              endMin,
+            });
+          }
+          const byDay = rowsMap.get(key)!.byDay;
+          (byDay[resp.dayISO] ||= []).push(it.soldier_name || "");
+        }
+      }
+
+      // Sort rows: Mission → Hours → Role
+      const rowsArr = Array.from(rowsMap.values()).sort((a, b) => {
+        if (a.mission !== b.mission) return a.mission.localeCompare(b.mission);
+        if (a.startMin !== b.startMin) return a.startMin - b.startMin;
+        if (a.endMin !== b.endMin) return a.endMin - b.endMin;
+        const rpA = rolePriority(a.role);
+        const rpB = rolePriority(b.role);
+        if (rpA !== rpB) return rpA - rpB;
+        return a.role.localeCompare(b.role);
+      });
+
+      // Create HTML table for PDF export with proper Hebrew and RTL support
+      const reversedDayHeaders = [...dayHeaders].reverse();
+      const tableData: any[] = [];
+      
+      let lastMission = "";
+      let lastHours = "";
+      let currentSlotRowCount = 0;
+      
+      for (let idx = 0; idx < rowsArr.length; idx++) {
+        const r = rowsArr[idx];
+        const counts = daysISO.map((d) => (r.byDay[d]?.length ?? 0));
+        const maxRows = Math.max(...counts, 1);
+
+        const isNewSlot = idx > 0 && (r.mission !== lastMission || r.hours !== lastHours);
+        
+        if (isNewSlot) {
+          currentSlotRowCount = 0;
+          // Add empty row before new time slot
+          tableData.push({ isSpacer: true });
+        }
+        
+        lastMission = r.mission;
+        lastHours = r.hours;
+
+        for (let i = 0; i < maxRows; i++) {
+          const row: any = {
+            isSpacer: false,
+            cells: []
+          };
+          row.cells.push(currentSlotRowCount === 0 ? r.mission : '');
+          row.cells.push(currentSlotRowCount === 0 ? r.hours : '');
+          row.cells.push(r.role);
+          reversedDayHeaders.forEach((_header, colIdx) => {
+            row.cells.push(r.byDay[daysISO[daysISO.length - 1 - colIdx]]?.[i] ?? "");
+          });
+          tableData.push(row);
+          currentSlotRowCount++;
+        }
+      }
+
+      // Create HTML table element
+      const table = document.createElement('table');
+      table.style.borderCollapse = 'collapse';
+      table.style.width = '100%';
+      table.style.fontFamily = 'Arial, "Noto Sans Hebrew", sans-serif';
+      table.style.fontSize = '9pt';
+      table.style.direction = 'rtl';
+      
+      // Create header row
+      const thead = document.createElement('thead');
+      const headerRow = document.createElement('tr');
+      headerRow.style.backgroundColor = '#4b5563';
+      headerRow.style.color = '#fff';
+      headerRow.style.fontWeight = 'bold';
+      
+      const headers = ['משימה', 'שעות', 'תפקיד', ...reversedDayHeaders];
+      headers.forEach(header => {
+        const th = document.createElement('th');
+        th.style.padding = '8px';
+        th.style.border = '1px solid #374151';
+        th.style.textAlign = 'right';
+        th.textContent = header;
+        headerRow.appendChild(th);
+      });
+      thead.appendChild(headerRow);
+      table.appendChild(thead);
+      
+      // Create body rows
+      const tbody = document.createElement('tbody');
+      let rowIndex = 0; // Track non-spacer rows for alternating colors
+      tableData.forEach((row) => {
+        if (row.isSpacer) {
+          // Add empty spacer row with better separation
+          const spacerRow = document.createElement('tr');
+          spacerRow.style.height = '16px';
+          spacerRow.style.backgroundColor = '#0f172a';
+          headers.forEach(() => {
+            const td = document.createElement('td');
+            td.style.padding = '0';
+            td.style.border = 'none';
+            spacerRow.appendChild(td);
+          });
+          tbody.appendChild(spacerRow);
+        } else {
+          const tr = document.createElement('tr');
+          if (rowIndex % 2 === 0) {
+            tr.style.backgroundColor = '#1f2937';
+          }
+          row.cells.forEach((cell: string) => {
+            const td = document.createElement('td');
+            td.style.padding = '6px 8px';
+            td.style.border = '1px solid #374151';
+            td.style.textAlign = 'right';
+            td.textContent = cell;
+            tr.appendChild(td);
+          });
+          tbody.appendChild(tr);
+          rowIndex++;
+        }
+      });
+      table.appendChild(tbody);
+      
+      // Create a temporary container div
+      const container = document.createElement('div');
+      container.style.position = 'absolute';
+      container.style.left = '-9999px';
+      container.style.width = '1122px'; // A4 landscape width at 72 DPI
+      container.style.backgroundColor = '#111827';
+      container.style.color = '#e5e7eb';
+      container.style.padding = '20px';
+      container.appendChild(table);
+      document.body.appendChild(container);
+      
+      try {
+        // Convert HTML to canvas
+        const canvas = await html2canvas(container, {
+          backgroundColor: '#111827',
+          scale: 2,
+          useCORS: true,
+          logging: false,
+        });
+        
+        // Remove the temporary container
+        document.body.removeChild(container);
+        
+        // Create PDF from canvas, fitting everything on one page
+        const doc = new jsPDF('landscape', 'pt', 'a4');
+        
+        // A4 landscape dimensions in points
+        const pdfWidth = 842; // A4 landscape width in pts
+        const pdfHeight = 595; // A4 landscape height in pts
+        
+        // Calculate scaling to fit the canvas on one page
+        const scaleX = pdfWidth / (canvas.width / 2); // Divide by 2 because canvas is scaled 2x
+        const scaleY = pdfHeight / (canvas.height / 2);
+        const scale = Math.min(scaleX, scaleY); // Use the smaller scale to fit both dimensions
+        
+        // Calculate scaled dimensions
+        const scaledWidth = (canvas.width / 2) * scale;
+        const scaledHeight = (canvas.height / 2) * scale;
+        
+        // Center the image on the page
+        const xPosition = (pdfWidth - scaledWidth) / 2;
+        const yPosition = (pdfHeight - scaledHeight) / 2;
+        
+        // Add the entire canvas to a single PDF page
+        const imgData = canvas.toDataURL('image/png');
+        doc.addImage(imgData, 'PNG', xPosition, yPosition, scaledWidth, scaledHeight);
+        
+        // Save PDF
+        const first = daysISO[0];
+        const last = daysISO[daysISO.length - 1];
+        doc.save(`assignments_${first}_to_${last}_by_slot.pdf`);
+      } catch (convertError) {
+        document.body.removeChild(container);
+        throw convertError;
+      }
+    } catch (e: any) {
+      alert(humanError(e, "Failed to export PDF"));
     } finally {
       setBusy(false);
     }
@@ -2072,7 +2351,7 @@ async function shufflePlanner() {
       onFillPlan: () => setConfirmFillOpen(true),
       onShufflePlan: () => setConfirmShuffleOpen(true),
       onDeletePlan: () => setConfirmDeleteOpen(true),
-      onExportFile: () => exportCsv(),
+      onExportFile: () => setExportModalOpen(true),
       onAvailableSoldiers: () => openAvailableModal(),
       onLockToggle: () => {
         setLockedByDay(prev => ({ ...prev, [day]: !prev[day] }));
@@ -2085,6 +2364,16 @@ async function shufflePlanner() {
     return () => setActions({});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setActions, day, lockedByDay, locked]);
+
+  // Handle export from modal
+  async function handleExport() {
+    setExportModalOpen(false);
+    if (exportFormat === 'csv') {
+      await exportCsv(exportDays);
+    } else {
+      await exportPdf(exportDays);
+    }
+  }
 
   useEffect(() => {
     try {
@@ -2144,7 +2433,7 @@ async function shufflePlanner() {
           <div style={{ color: "crimson", marginBottom: 8 }}>{availError}</div>
         )}
         {!availLoading && !availError && (
-          <div style={{ maxHeight: 480, overflowY: "auto" }}>
+          <div>
             {/* Build assigned-today set from rowsForWarnings */}
             {(() => {
               const { start: dayStart, end: dayEnd } = dayBoundsMs(day);
@@ -3327,6 +3616,158 @@ async function shufflePlanner() {
               </div>
             </div>
           )}
+        </div>
+      </Modal>
+
+      {/* Export Modal */}
+      <Modal
+        open={exportModalOpen}
+        onClose={() => setExportModalOpen(false)}
+        title="ייצא תכנית"
+        footer={
+          <>
+            <button
+              className="btn"
+              onClick={handleExport}
+              disabled={busy}
+              style={{ backgroundColor: '#10b981', color: '#fff' }}
+            >
+              ייצא
+            </button>
+            <button
+              className="btn"
+              onClick={() => setExportModalOpen(false)}
+              style={{ backgroundColor: '#6b7280' }}
+            >
+              ביטול
+            </button>
+          </>
+        }
+      >
+        <div style={{ color: '#e5e7eb', display: 'grid', gap: 16 }}>
+          <div>
+            <label style={{ display: 'block', marginBottom: 8, fontWeight: 500 }}>
+              מספר ימים ליצוא (היום + ימים קודמים):
+            </label>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                type="button"
+                onClick={() => setExportDays(1)}
+                style={{
+                  flex: 1,
+                  padding: '10px',
+                  backgroundColor: exportDays === 1 ? '#10b981' : '#374151',
+                  color: exportDays === 1 ? '#fff' : '#e5e7eb',
+                  border: `1px solid ${exportDays === 1 ? '#10b981' : '#4b5563'}`,
+                  borderRadius: '6px',
+                  fontSize: '14px',
+                  fontWeight: 500,
+                  cursor: 'pointer',
+                  transition: 'all 0.2s',
+                }}
+              >
+                1
+              </button>
+              <button
+                type="button"
+                onClick={() => setExportDays(2)}
+                style={{
+                  flex: 1,
+                  padding: '10px',
+                  backgroundColor: exportDays === 2 ? '#10b981' : '#374151',
+                  color: exportDays === 2 ? '#fff' : '#e5e7eb',
+                  border: `1px solid ${exportDays === 2 ? '#10b981' : '#4b5563'}`,
+                  borderRadius: '6px',
+                  fontSize: '14px',
+                  fontWeight: 500,
+                  cursor: 'pointer',
+                  transition: 'all 0.2s',
+                }}
+              >
+                2
+              </button>
+              <button
+                type="button"
+                onClick={() => setExportDays(3)}
+                style={{
+                  flex: 1,
+                  padding: '10px',
+                  backgroundColor: exportDays === 3 ? '#10b981' : '#374151',
+                  color: exportDays === 3 ? '#fff' : '#e5e7eb',
+                  border: `1px solid ${exportDays === 3 ? '#10b981' : '#4b5563'}`,
+                  borderRadius: '6px',
+                  fontSize: '14px',
+                  fontWeight: 500,
+                  cursor: 'pointer',
+                  transition: 'all 0.2s',
+                }}
+              >
+                3
+              </button>
+              <button
+                type="button"
+                onClick={() => setExportDays(4)}
+                style={{
+                  flex: 1,
+                  padding: '10px',
+                  backgroundColor: exportDays === 4 ? '#10b981' : '#374151',
+                  color: exportDays === 4 ? '#fff' : '#e5e7eb',
+                  border: `1px solid ${exportDays === 4 ? '#10b981' : '#4b5563'}`,
+                  borderRadius: '6px',
+                  fontSize: '14px',
+                  fontWeight: 500,
+                  cursor: 'pointer',
+                  transition: 'all 0.2s',
+                }}
+              >
+                4
+              </button>
+            </div>
+          </div>
+
+          <div>
+            <label style={{ display: 'block', marginBottom: 8, fontWeight: 500 }}>
+              פורמט קובץ:
+            </label>
+            <div style={{ display: 'flex', gap: 12 }}>
+              <button
+                type="button"
+                onClick={() => setExportFormat('csv')}
+                style={{
+                  flex: 1,
+                  padding: '12px',
+                  backgroundColor: exportFormat === 'csv' ? '#10b981' : '#374151',
+                  color: exportFormat === 'csv' ? '#fff' : '#e5e7eb',
+                  border: `1px solid ${exportFormat === 'csv' ? '#10b981' : '#4b5563'}`,
+                  borderRadius: '6px',
+                  fontSize: '14px',
+                  fontWeight: 500,
+                  cursor: 'pointer',
+                  transition: 'all 0.2s',
+                }}
+              >
+                CSV
+              </button>
+              <button
+                type="button"
+                onClick={() => setExportFormat('pdf')}
+                style={{
+                  flex: 1,
+                  padding: '12px',
+                  backgroundColor: exportFormat === 'pdf' ? '#10b981' : '#374151',
+                  color: exportFormat === 'pdf' ? '#fff' : '#e5e7eb',
+                  border: `1px solid ${exportFormat === 'pdf' ? '#10b981' : '#4b5563'}`,
+                  borderRadius: '6px',
+                  fontSize: '14px',
+                  fontWeight: 500,
+                  cursor: 'pointer',
+                  transition: 'all 0.2s',
+                }}
+              >
+                PDF
+              </button>
+            </div>
+          </div>
         </div>
       </Modal>
 
