@@ -57,12 +57,10 @@ export default function VacationsModal({ isOpen, onClose, soldier, onVacationsUp
     const sameId = (x: any, y: any) => Number(x) === Number(y);
 
     try {
-      // Try soldier-scoped endpoint first
+      // Use the correct soldier-scoped endpoint
       try {
-        const r = await api.get(`/soldiers/${soldierId}/vacations`, { params: { t: Date.now() } });
-        const payload = r.data ?? [];
-        const items = Array.isArray(payload) ? payload : (payload.items ?? payload.results ?? []);
-        setVacations(items.filter((v: Vacation) => sameId(v.soldier_id, soldierId)));
+        const res = await api.get(`/vacations/soldiers/${soldierId}`);
+        setVacations(Array.isArray(res.data) ? res.data : []);
         return;
       } catch (_e) {
         // fall through
@@ -80,15 +78,6 @@ export default function VacationsModal({ isOpen, onClose, soldier, onVacationsUp
           return false;
         }
       };
-
-      // Try alternative endpoint
-      try {
-        const res = await api.get(`/vacations/soldiers/${soldierId}`);
-        setVacations(Array.isArray(res.data) ? res.data : []);
-        return;
-      } catch (_e) {
-        // fall through
-      }
 
       const ok =
         (await tryGlobal("soldier_id").catch(() => false)) ||
@@ -133,7 +122,7 @@ export default function VacationsModal({ isOpen, onClose, soldier, onVacationsUp
         // CREATE
         let created: Vacation | null = null;
         try {
-          const r = await api.post(`/soldiers/${soldier.id}/vacations`, payload);
+          const r = await api.post(`/vacations/soldiers/${soldier.id}`, payload);
           created = r.data as Vacation;
         } catch (e: any) {
           if (e?.response?.status === 404) {
@@ -151,26 +140,10 @@ export default function VacationsModal({ isOpen, onClose, soldier, onVacationsUp
           await fetchVacations(soldier.id);
         }
       } else {
-        // UPDATE
-        let updated: Vacation | null = null;
-        try {
-          const r = await api.patch(`/soldiers/${soldier.id}/vacations/${vacEditId}`, payload);
-          updated = r.data as Vacation;
-        } catch (e: any) {
-          if (e?.response?.status === 404) {
-            const r = await api.patch(`/vacations/${vacEditId}`, { ...payload, soldier_id: soldier.id });
-            updated = r.data as Vacation;
-          } else {
-            throw e;
-          }
-        }
-
-        // If backend returned the updated row, merge it; otherwise refresh
-        if (updated && updated.id) {
-          setVacations(prev => prev.map(v => (v.id === updated!.id ? updated! : v)));
-        } else {
-          await fetchVacations(soldier.id);
-        }
+        // UPDATE - Note: There's no PATCH endpoint in the backend, only DELETE
+        // For now, we'll skip UPDATE and let users delete/recreate if needed
+        setErr("עדכון חופשה אינו נתמך. אנא מחק והגדר מחדש.");
+        return;
       }
 
       // Reset form
@@ -201,15 +174,10 @@ export default function VacationsModal({ isOpen, onClose, soldier, onVacationsUp
       try {
         let ok = false;
         try {
-          const r = await api.delete(`/soldiers/${soldier.id}/vacations/${v.id}`);
+          const r = await api.delete(`/vacations/${v.id}`);
           ok = r.status >= 200 && r.status < 300;
         } catch (e: any) {
-          if (e?.response?.status === 404) {
-            const r = await api.delete(`/vacations/${v.id}`);
-            ok = r.status >= 200 && r.status < 300;
-          } else {
-            throw e;
-          }
+          throw e;
         }
 
         // Optimistic remove
