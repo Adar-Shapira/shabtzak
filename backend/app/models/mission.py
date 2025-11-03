@@ -9,6 +9,7 @@ class Mission(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
     total_needed = Column(Integer, nullable=True)
+    order = Column(Integer, nullable=False, default=0)
 
     slots = relationship(
         "MissionSlot",

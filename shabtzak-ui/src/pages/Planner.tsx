@@ -662,10 +662,23 @@ async function shufflePlanner() {
         }
       }
 
-      // Sort rows: Mission → Hours → Role
+      // Create mission name to order map
+      const missionOrderMap = new Map<string, number>();
+      for (const m of allMissions) {
+        if (m.name) {
+          missionOrderMap.set(m.name, m.order ?? 0);
+        }
+      }
+
+      // Sort rows: Mission (by order) → Hours → Role
       const rowsArr = Array.from(rowsMap.values()).sort((a, b) => {
-        // 1) Mission (A→Z)
-        if (a.mission !== b.mission) return a.mission.localeCompare(b.mission);
+        // 1) Mission (by order, then alphabetically as fallback)
+        if (a.mission !== b.mission) {
+          const orderA = missionOrderMap.get(a.mission) ?? 999999;
+          const orderB = missionOrderMap.get(b.mission) ?? 999999;
+          if (orderA !== orderB) return orderA - orderB;
+          return a.mission.localeCompare(b.mission);
+        }
 
         // 2) Hours (chronological within the mission, using start then end)
         if (a.startMin !== b.startMin) return a.startMin - b.startMin;
@@ -849,11 +862,27 @@ async function shufflePlanner() {
         }
       }
 
-      // Sort rows: Mission → Hours → Role
+      // Create mission name to order map
+      const missionOrderMap = new Map<string, number>();
+      for (const m of allMissions) {
+        if (m.name) {
+          missionOrderMap.set(m.name, m.order ?? 0);
+        }
+      }
+
+      // Sort rows: Mission (by order) → Hours → Role
       const rowsArr = Array.from(rowsMap.values()).sort((a, b) => {
-        if (a.mission !== b.mission) return a.mission.localeCompare(b.mission);
+        // 1) Mission (by order, then alphabetically as fallback)
+        if (a.mission !== b.mission) {
+          const orderA = missionOrderMap.get(a.mission) ?? 999999;
+          const orderB = missionOrderMap.get(b.mission) ?? 999999;
+          if (orderA !== orderB) return orderA - orderB;
+          return a.mission.localeCompare(b.mission);
+        }
+        // 2) Hours (chronological within the mission, using start then end)
         if (a.startMin !== b.startMin) return a.startMin - b.startMin;
         if (a.endMin !== b.endMin) return a.endMin - b.endMin;
+        // 3) Role (priority order, then alphabetical for ties; blank last)
         const rpA = rolePriority(a.role);
         const rpB = rolePriority(b.role);
         if (rpA !== rpB) return rpA - rpB;
@@ -2257,13 +2286,28 @@ async function shufflePlanner() {
       missionByName.set(m.name ?? "", m);
     }
 
-    // collect missions alphabetically
-    const missionOrder = Array.from(
+    // Create mission name to order map for sorting
+    const missionOrderMap = new Map<string, number>();
+    for (const m of allMissions) {
+      if (m.name) {
+        missionOrderMap.set(m.name, m.order ?? 0);
+      }
+    }
+
+    // collect missions ordered by order field (then alphabetically as fallback)
+    const missionNames = Array.from(
       new Set([
         ...sortedRows.map(r => r.mission?.name ?? ""),
         ...allMissions.map(m => m.name ?? ""),
       ])
-    ).sort((a, b) => a.localeCompare(b));
+    );
+    
+    const missionOrder = missionNames.sort((a, b) => {
+      const orderA = missionOrderMap.get(a) ?? 999999;
+      const orderB = missionOrderMap.get(b) ?? 999999;
+      if (orderA !== orderB) return orderA - orderB;
+      return a.localeCompare(b);
+    });
 
     const result: Grouped = [];
 
@@ -3553,7 +3597,15 @@ async function shufflePlanner() {
                         grouped.get(key)!.push(assignment);
                       }
 
-                      // Sort groups: first by mission name, then by start time
+                      // Create mission name to order map for sorting
+                      const missionOrderMap = new Map<string, number>();
+                      for (const m of allMissions) {
+                        if (m.name) {
+                          missionOrderMap.set(m.name, m.order ?? 0);
+                        }
+                      }
+
+                      // Sort groups: first by mission order (then alphabetically), then by start time
                       const sortedGroups = Array.from(grouped.entries()).sort((a, b) => {
                         const [aKey] = a;
                         const [bKey] = b;
@@ -3562,6 +3614,9 @@ async function shufflePlanner() {
                         const aMission = aKey.split('__')[0];
                         const bMission = bKey.split('__')[0];
                         if (aMission !== bMission) {
+                          const orderA = missionOrderMap.get(aMission) ?? 999999;
+                          const orderB = missionOrderMap.get(bMission) ?? 999999;
+                          if (orderA !== orderB) return orderA - orderB;
                           return aMission.localeCompare(bMission);
                         }
                         return aStartMs - bStartMs;

@@ -12,6 +12,7 @@ export type Mission = {
   id: number;
   name: string;
   total_needed?: number | null;
+  order: number;
 };
 
 export type MissionCreate = {

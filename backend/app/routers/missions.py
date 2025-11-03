@@ -54,18 +54,21 @@ def _tstr(t: time | None) -> str | None:
 # ----------------------------------------------------------------------
 @router.get("", response_model=List[MissionOut])
 def list_missions(db: Session = Depends(get_db)):
-    """List all missions (start/end may be null)."""
-    rows = db.scalars(select(Mission).order_by(Mission.id)).all()
+    """List all missions ordered by order field (fallback to id)."""
+    rows = db.scalars(select(Mission).order_by(Mission.order, Mission.id)).all()
     return rows
 
 
 @router.post("", response_model=MissionOut, status_code=201)
 def create_mission(payload: MissionCreate, db: Session = Depends(get_db)):
     try:
+        # Set order to max order + 1 for new missions
+        max_order = db.scalar(select(func.max(Mission.order))) or 0
         new_id = db.execute(
             insert(Mission).values(
                 name=payload.name.strip(),
                 total_needed=payload.total_needed,
+                order=max_order + 1,
             ).returning(Mission.id)
         ).scalar_one()
         db.commit()

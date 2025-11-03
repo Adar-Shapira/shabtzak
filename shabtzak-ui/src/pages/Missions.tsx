@@ -6,6 +6,8 @@ import CheckIcon from "@mui/icons-material/Check";
 import CloseIcon from "@mui/icons-material/Close";
 import AddIcon from "@mui/icons-material/Add";
 import RemoveIcon from "@mui/icons-material/Remove";
+import ArrowUpwardIcon from "@mui/icons-material/ArrowUpward";
+import ArrowDownwardIcon from "@mui/icons-material/ArrowDownward";
 import { api } from "../api";
 import Modal from "../components/Modal";
 import { useDisclosure } from "../hooks/useDisclosure";
@@ -22,6 +24,7 @@ type Mission = {
   id: number;
   name: string;
   total_needed?: number | null;
+  order: number;
 };
 
 // For role selector in requirements editor
@@ -628,6 +631,28 @@ export default function MissionsPage() {
     }
   };
 
+  const moveMission = async (missionId: number, direction: 'up' | 'down') => {
+    const currentIndex = rows.findIndex(m => m.id === missionId);
+    if (currentIndex === -1) return;
+
+    const newIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+    if (newIndex < 0 || newIndex >= rows.length) return;
+
+    const currentMission = rows[currentIndex];
+    const targetMission = rows[newIndex];
+
+    try {
+      // Swap orders
+      await Promise.all([
+        api.patch(`/missions/${currentMission.id}`, { order: targetMission.order }),
+        api.patch(`/missions/${targetMission.id}`, { order: currentMission.order }),
+      ]);
+      await load();
+    } catch (e: any) {
+      setErr(e?.response?.data?.detail ?? "Failed to reorder missions");
+    }
+  };
+
   return (
     <div style={{ maxWidth: 1100, margin: "24px auto", padding: 16 }}>
       <Modal open={addDlg.isOpen} onClose={addDlg.close} title="הוסף משימה" maxWidth={640}>
@@ -717,8 +742,10 @@ export default function MissionsPage() {
           )}
 
           <div style={{ display: "grid", gap: 10 }}>
-            {rows.map((m) => {
+            {rows.map((m, index) => {
               const editing = editId === m.id;
+              const canMoveUp = index > 0;
+              const canMoveDown = index < rows.length - 1;
               return (
                 <details
                   key={m.id}
@@ -756,8 +783,54 @@ export default function MissionsPage() {
                       </div>
                       <div
                         onClick={(e) => e.preventDefault()} // avoid toggling <details> via buttons
-                        style={{ display: "flex", gap: 8, alignItems: "center" }}
+                        style={{ display: "flex", gap: 4, alignItems: "center" }}
                       >
+                        {!editing && (
+                          <>
+                            <button
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                moveMission(m.id, 'up');
+                              }}
+                              disabled={!canMoveUp}
+                              title="הזז למעלה"
+                              style={{
+                                padding: "4px 6px",
+                                border: "none",
+                                background: "transparent",
+                                cursor: canMoveUp ? "pointer" : "not-allowed",
+                                display: "inline-flex",
+                                alignItems: "center",
+                                color: "#e5e7eb",
+                                opacity: canMoveUp ? 1 : 0.3,
+                              }}
+                            >
+                              <ArrowUpwardIcon fontSize="small" />
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                moveMission(m.id, 'down');
+                              }}
+                              disabled={!canMoveDown}
+                              title="הזז למטה"
+                              style={{
+                                padding: "4px 6px",
+                                border: "none",
+                                background: "transparent",
+                                cursor: canMoveDown ? "pointer" : "not-allowed",
+                                display: "inline-flex",
+                                alignItems: "center",
+                                color: "#e5e7eb",
+                                opacity: canMoveDown ? 1 : 0.3,
+                              }}
+                            >
+                              <ArrowDownwardIcon fontSize="small" />
+                            </button>
+                          </>
+                        )}
                         {editing ? (
                           <>
                             <button
