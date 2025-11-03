@@ -2776,7 +2776,7 @@ async function shufflePlanner() {
                                         type="button"
                                         onClick={() => openSoldierHistory(r.soldier_id!, r.soldier_name)}
                                         className="underline"
-                                        title="View Mission History"
+                                        title="היסטוריית משימות של החייל"
                                       >
                                         {r.soldier_name}
                                       </button>

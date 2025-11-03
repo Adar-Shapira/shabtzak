@@ -1,6 +1,6 @@
 // shabtzak-ui\src\layouts\Shell.tsx
 import { Outlet, useLocation } from "react-router-dom";
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import NavBar from "../components/NavBar";
 import Sidebar from "../components/Sidebar";
 import { SidebarProvider } from "../contexts/SidebarContext";
@@ -62,6 +62,62 @@ function WarningsPanelSlot({ isCollapsed, onToggle }: { isCollapsed: boolean; on
   const hasOrange = warnings.some(w => w.level === "ORANGE");
   const dotColor = hasRed ? "crimson" : hasOrange ? "#d97706" : null;
   
+  // Translate warning types to Hebrew
+  const translateWarningType = (type: string): string => {
+    const typeMap: Record<string, string> = {
+      "OVERLAP": "חפיפה",
+      "REST": "מנוחה",
+      "RESTRICTED": "הגבלה",
+      "NOT_FRIENDS": "לא חברים",
+    };
+    return typeMap[type] || type;
+  };
+  
+  // Translate warning level to Hebrew
+  const translateWarningLevel = (level: string | undefined): string => {
+    const levelMap: Record<string, string> = {
+      "RED": "אדום",
+      "ORANGE": "כתום",
+      "GRAY": "אפור",
+    };
+    return level ? levelMap[level] || level : "";
+  };
+  
+  // Translate warning details to Hebrew
+  const translateWarningDetails = (details: string | null): string => {
+    if (!details) return "";
+    
+    // Translate "Assigned with [name]"
+    if (details.startsWith("Assigned with ")) {
+      const name = details.replace("Assigned with ", "");
+      return `מוקצה עם ${name}`;
+    }
+    
+    // Translate "Overlaps with previous assignment ending at [time]"
+    if (details.startsWith("Overlaps with previous assignment ending at ")) {
+      const time = details.replace("Overlaps with previous assignment ending at ", "");
+      return `חפיפה עם משימה קודמת שנגמרה ב-${time}`;
+    }
+    
+    // Translate "Rest between missions is [time]"
+    if (details.startsWith("Rest between missions is ")) {
+      const time = details.replace("Rest between missions is ", "");
+      return `מנוחה בין משימות: ${time}`;
+    }
+    
+    // Translate "Two consecutive ~8h rests: [time1] and [time2]"
+    if (details.startsWith("Two consecutive ~8h rests: ")) {
+      const rest = details.replace("Two consecutive ~8h rests: ", "");
+      const parts = rest.split(" and ");
+      if (parts.length === 2) {
+        return `שתי מנוחות רצופות של ~8 שעות: ${parts[0]} ו-${parts[1]}`;
+      }
+      return `שתי מנוחות רצופות של ~8 שעות: ${rest}`;
+    }
+    
+    return details;
+  };
+  
   return (
     <>
       <div className={`warnings-panel-container ${isCollapsed ? 'collapsed' : ''}`}>
@@ -103,7 +159,7 @@ function WarningsPanelSlot({ isCollapsed, onToggle }: { isCollapsed: boolean; on
                       onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.08)'}
                       onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.03)'}
                     >
-                      <div style={{ fontWeight: 600, marginBottom: 4 }}>{w.type}</div>
+                      <div style={{ fontWeight: 600, marginBottom: 4 }}>{translateWarningType(w.type)}</div>
                       <div style={{ fontSize: 10, opacity: 0.8 }}>{w.soldier_name}</div>
                     </div>
                   );
@@ -140,7 +196,7 @@ function WarningsPanelSlot({ isCollapsed, onToggle }: { isCollapsed: boolean; on
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               <div>
-                <strong>סוג:</strong> {selectedWarning.type}
+                <strong>סוג:</strong> {translateWarningType(selectedWarning.type)}
               </div>
               <div>
                 <strong>חייל:</strong> {selectedWarning.soldier_name}
@@ -156,12 +212,12 @@ function WarningsPanelSlot({ isCollapsed, onToggle }: { isCollapsed: boolean; on
               </div>
               {selectedWarning.details && (
                 <div>
-                  <strong>פרטים:</strong> {selectedWarning.details}
+                  <strong>פרטים:</strong> {translateWarningDetails(selectedWarning.details)}
                 </div>
               )}
               {selectedWarning.level && (
                 <div>
-                  <strong>רמה:</strong> {selectedWarning.level}
+                  <strong>רמה:</strong> {translateWarningLevel(selectedWarning.level)}
                 </div>
               )}
             </div>
