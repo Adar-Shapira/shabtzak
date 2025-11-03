@@ -912,42 +912,66 @@ async function shufflePlanner() {
 
     const existing = rowsForWarnings.filter(r => r.soldier_id === s.id);
 
-    // 1) OVERLAP
+    // Find the previous assignment that ends before or at the candidate start
+    // Sort by end time descending to find the most recent one
+    const previousAssignments = existing
+      .map(r => ({
+        start: (r as any).start_epoch_ms ?? new Date(r.start_at).getTime(),
+        end:   (r as any).end_epoch_ms   ?? new Date(r.end_at).getTime(),
+      }))
+      .filter(r => r.end <= candStart!)
+      .sort((a, b) => b.end - a.end);
+
+    const prevEnd = previousAssignments.length > 0 ? previousAssignments[0].end : null;
+    const prevPrevEnd = previousAssignments.length > 1 ? previousAssignments[1].end : null;
+
+    const H8 = 8 * 60 * 60 * 1000;
+    const NEAR_EIGHT_MINUTES = 10; // Match backend constant
+    const NEAR_EIGHT_MS = NEAR_EIGHT_MINUTES * 60 * 1000;
+    const NEAR_EIGHT_TOLERANCE_LOW = H8 - (NEAR_EIGHT_MINUTES * 60 * 1000);
+    const NEAR_EIGHT_TOLERANCE_HIGH = H8 + NEAR_EIGHT_MS;
+
+    const out: Array<{ text: string; color: "red" | "orange" | "gray" }> = [];
+
+    if (prevEnd != null) {
+      const gap = candStart! - prevEnd;
+      
+      // 1) OVERLAP (red): true temporal overlap (start < prev_end)
+      if (gap < 0) {
+        out.push({ text: "חפיפה", color: "red" });
+      }
+      // 2) OVERLAP (orange): short rest < 8h (but >= 0)
+      else if (gap >= 0 && gap < H8) {
+        out.push({ text: "חפיפה", color: "orange" });
+      }
+      // 3) REST warnings: ~8h rest (8h to 8h+10min)
+      else if (gap >= H8 && gap <= NEAR_EIGHT_TOLERANCE_HIGH) {
+        // Check if previous rest was also ~8h (double REST warning = red)
+        let isDoubleRest = false;
+        if (prevPrevEnd != null) {
+          const prevGap = prevEnd - prevPrevEnd;
+          if (prevGap >= NEAR_EIGHT_TOLERANCE_LOW && prevGap <= NEAR_EIGHT_TOLERANCE_HIGH) {
+            isDoubleRest = true;
+          }
+        }
+        
+        if (isDoubleRest) {
+          out.push({ text: "מנוחה", color: "red" });
+        } else {
+          out.push({ text: "מנוחה", color: "orange" });
+        }
+      }
+    }
+
+    // Also check for overlaps with other assignments (not just previous)
     const hasOverlap = existing.some(r => {
       const sMs = (r as any).start_epoch_ms ?? new Date(r.start_at).getTime();
       const eMs = (r as any).end_epoch_ms   ?? new Date(r.end_at).getTime();
       return candStart! < eMs && candEnd! > sMs;
     });
 
-    // 2) REST tiers
-    const intervals = existing
-      .map(r => ({
-        start: (r as any).start_epoch_ms ?? new Date(r.start_at).getTime(),
-        end:   (r as any).end_epoch_ms   ?? new Date(r.end_at).getTime(),
-      }))
-      .concat([{ start: candStart, end: candEnd }])
-      .sort((a, b) => a.start - b.start);
-
-    const H8 = 8 * 60 * 60 * 1000;
-    const H16 = 16 * 60 * 60 * 1000;
-
-    let minPositiveGap = Number.POSITIVE_INFINITY;
-    for (let i = 0; i < intervals.length - 1; i++) {
-      const a = intervals[i];
-      const b = intervals[i + 1];
-      const gap = b.start - a.end;
-      if (gap >= 0 && gap < minPositiveGap) {
-        minPositiveGap = gap;
-      }
-    }
-
-    const out: Array<{ text: string; color: "red" | "orange" | "gray" }> = [];
-
-    if (hasOverlap) out.push({ text: "חפיפה", color: "red" });
-
-    if (Number.isFinite(minPositiveGap)) {
-      if (minPositiveGap < H8) out.push({ text: "מנוחה", color: "red" });
-      else if (minPositiveGap < H16) out.push({ text: "מנוחה", color: "orange" });
+    if (hasOverlap && !out.some(w => w.text === "חפיפה")) {
+      out.push({ text: "חפיפה", color: "red" });
     }
 
     // 3) RESTRICTED (gray) — based on the target mission of this slot
@@ -957,13 +981,25 @@ async function shufflePlanner() {
 
     // 4) NOT FRIENDS (gray) — check if any soldier already assigned to this slot is "not_friend" with candidate
     if (candStart != null && candEnd != null) {
+      // Get the soldier_id of the currently assigned soldier (if we're replacing an assignment)
+      let currentlyAssignedSoldierId: number | null = null;
+      if (pendingAssignmentId) {
+        const target = rows.find(r => r.id === pendingAssignmentId);
+        if (target && target.soldier_id) {
+          currentlyAssignedSoldierId = target.soldier_id;
+        }
+      }
+      
       // Find all soldiers assigned to the same time slot (same mission, same start/end time)
+      // Exclude the currently assigned soldier (if replacing) since they will be replaced
       const sameSlotSoldiers = rowsForWarnings.filter(r => {
         if (!r.mission?.id || r.mission.id !== targetMissionId) return false;
         const rStart = (r as any).start_epoch_ms ?? new Date(r.start_at).getTime();
         const rEnd = (r as any).end_epoch_ms ?? new Date(r.end_at).getTime();
         // Check if same time slot (allow small tolerance for time precision)
-        return Math.abs(rStart - candStart!) < 1000 && Math.abs(rEnd - candEnd!) < 1000 && r.soldier_id;
+        const isSameSlot = Math.abs(rStart - candStart!) < 1000 && Math.abs(rEnd - candEnd!) < 1000 && r.soldier_id;
+        // Exclude the currently assigned soldier (the one being replaced)
+        return isSameSlot && r.soldier_id !== currentlyAssignedSoldierId;
       });
 
       // Check if any soldier in the same slot is "not_friend" with the candidate
@@ -1391,11 +1427,19 @@ async function shufflePlanner() {
         await loadDayRosterForWarnings(slotDayISO);
 
         // 1) Decide the role to filter by
+        // For general slots (no role requirement), show all soldiers
+        // Only filter by role if one was explicitly provided
         let finalRoleId: number | null = roleId ?? null;
         let finalRoleName: string | null = roleName ?? null;
 
-        // Try requirements if not provided
-        if (finalRoleId == null && !finalRoleName) {
+        // IMPORTANT: If both roleId and roleName are explicitly null/undefined,
+        // this is a general slot - do NOT infer from requirements or mission name.
+        // Only infer if one of them was provided but the other wasn't.
+        const isExplicitlyGeneral = (roleId === null || roleId === undefined) && 
+                                     (roleName === null || roleName === undefined || roleName === "");
+
+        if (!isExplicitlyGeneral && finalRoleId == null && !finalRoleName) {
+          // Try requirements only if this is NOT an explicitly general slot
           const reqMeta = requirementsByMission.get(missionId);
           if (reqMeta && (reqMeta.requirements?.length || 0) > 0) {
             const activeReqs = (reqMeta.requirements || []).filter(r => reqCount(r) > 0);
@@ -1403,18 +1447,23 @@ async function shufflePlanner() {
               finalRoleId = reqRoleId(activeReqs[0]);
               finalRoleName = reqRoleName(activeReqs[0]);
             }
+            // If multiple roles are required, don't infer - treat as general slot
           }
         }
 
-        // Fallback: infer from mission name if still missing
-        if (finalRoleId == null && !finalRoleName) {
-          const missionName = (allMissions.find(m => m.id === missionId)?.name) || "";
-          finalRoleName = guessRoleFromMissionName(missionName);
-        }
+        // Don't infer from mission name - if no role is provided and requirements have multiple roles,
+        // this is a general slot and should show all soldiers
 
         // 2) Filter by that role (exact id first; else name)
-        const pred = rolePredicate(finalRoleId, finalRoleName);
-        const roleFiltered = soldiers.filter(pred);
+        // If no role specified (general slot), show all soldiers
+        let roleFiltered: Soldier[];
+        if (finalRoleId == null && !finalRoleName) {
+          // General slot - show all soldiers
+          roleFiltered = soldiers;
+        } else {
+          const pred = rolePredicate(finalRoleId, finalRoleName);
+          roleFiltered = soldiers.filter(pred);
+        }
 
         // 3) Then apply vacation/overlap checks (same as Unassigned path)
         const allowed: Soldier[] = [];
