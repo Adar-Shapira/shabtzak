@@ -378,11 +378,8 @@ export default function SoldiersPage() {
         }
     };
 
-    const updateFriendshipStatus = async (friendId: number, status: 'friend' | 'not_friend' | null) => {
-        if (!friendshipSoldier) return;
-        
-        // Update local state immediately
-        const updatedList = friendshipList.map(f => {
+    const updateFriendshipStatus = (friendId: number, status: 'friend' | 'not_friend' | null) => {
+        setFriendshipList(prev => prev.map(f => {
             if (f.friend_id === friendId) {
                 // If clicking the same status, toggle to neutral (null)
                 if (f.status === status) {
@@ -392,25 +389,7 @@ export default function SoldiersPage() {
                 return { ...f, status };
             }
             return f;
-        });
-        
-        setFriendshipList(updatedList);
-        
-        // Auto-save the changes
-        try {
-            setSavingFriendship(friendshipSoldier.id);
-            const friendshipsToSave = updatedList.map(f => ({
-                ...f,
-                soldier_id: friendshipSoldier.id,
-            }));
-            await updateSoldierFriendships(friendshipSoldier.id, friendshipsToSave);
-        } catch (e: any) {
-            setErr(e.message || "Failed to save friendships");
-            // Revert on error
-            setFriendshipList(friendshipList);
-        } finally {
-            setSavingFriendship(null);
-        }
+        }));
     };
 
     useEffect(() => {
@@ -606,7 +585,7 @@ export default function SoldiersPage() {
             setRoles(r.data);
             setDepartments(d.data);
             setSoldiers(s.data as Soldier[]);
-            setMissions(m.data.map(x => ({ id: x.id, name: x.name })));
+            setMissions(m.data);
         } catch (e: any) {
             setErr(e?.response?.data?.detail ?? "Failed to load data");
         } finally {
@@ -1582,13 +1561,23 @@ export default function SoldiersPage() {
                                         </table>
                                     )}
                                 </div>
-                                {savingFriendship === friendshipSoldier.id && (
-                                    <div style={{ marginTop: 12, textAlign: "center", fontSize: 14, opacity: 0.7 }}>
-                                        שומר...
-                                    </div>
-                                )}
                                 <div style={{ marginTop: 16, display: "flex", gap: 8, justifyContent: "flex-end" }}>
                                     <button onClick={closeFriendships}>סגור</button>
+                                    <button
+                                        onClick={saveFriendships}
+                                        disabled={savingFriendship === friendshipSoldier.id}
+                                        style={{
+                                            backgroundColor: "#10b981",
+                                            color: "white",
+                                            padding: "8px 16px",
+                                            border: "none",
+                                            borderRadius: 4,
+                                            cursor: savingFriendship === friendshipSoldier.id ? "not-allowed" : "pointer",
+                                            opacity: savingFriendship === friendshipSoldier.id ? 0.6 : 1,
+                                        }}
+                                    >
+                                        {savingFriendship === friendshipSoldier.id ? "שומר..." : "שמור"}
+                                    </button>
                                 </div>
                             </div>
                         )}
