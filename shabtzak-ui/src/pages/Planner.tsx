@@ -23,6 +23,14 @@ import {
   type SavedPlanDetail,
   type SavedPlanData,
   getSoldierFriendships,
+  exportPlannerData,
+  importPlannerData,
+  type PlannerExportPackage,
+  type PlannerImportSummary,
+  exportPlannerAllData,
+  importPlannerAllData,
+  type PlannerAllExportPackage,
+  type PlannerAllImportSummary,
 } from "../api";
 
 import Modal from "../components/Modal";
@@ -340,6 +348,14 @@ export default function Planner() {
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [exportDays, setExportDays] = useState<number>(3);
   const [exportFormat, setExportFormat] = useState<'csv' | 'pdf'>('csv');
+  const plannerImportInputRef = useRef<HTMLInputElement>(null);
+  const plannerAllImportInputRef = useRef<HTMLInputElement>(null);
+  const [plannerIoBusy, setPlannerIoBusy] = useState(false);
+  const [plannerImportSummary, setPlannerImportSummary] = useState<PlannerImportSummary | null>(null);
+  const [plannerIoError, setPlannerIoError] = useState<string | null>(null);
+  const [plannerAllIoBusy, setPlannerAllIoBusy] = useState(false);
+  const [plannerAllImportSummary, setPlannerAllImportSummary] = useState<PlannerAllImportSummary | null>(null);
+  const [plannerAllIoError, setPlannerAllIoError] = useState<string | null>(null);
 
   const [pendingEmptySlot, setPendingEmptySlot] = useState<null | {
     missionId: number;
@@ -2409,6 +2425,15 @@ async function shufflePlanner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setActions, day, lockedByDay, locked]);
 
+  useEffect(() => {
+    if (!exportModalOpen) {
+      setPlannerImportSummary(null);
+      setPlannerIoError(null);
+      setPlannerAllImportSummary(null);
+      setPlannerAllIoError(null);
+    }
+  }, [exportModalOpen]);
+
   // Handle export from modal
   async function handleExport() {
     setExportModalOpen(false);
@@ -2416,6 +2441,126 @@ async function shufflePlanner() {
       await exportCsv(exportDays);
     } else {
       await exportPdf(exportDays);
+    }
+  }
+
+  async function handlePlannerRawExport() {
+    setPlannerIoError(null);
+    setPlannerImportSummary(null);
+    setPlannerIoBusy(true);
+    try {
+      const pkg = await exportPlannerData(day);
+      const blob = new Blob([JSON.stringify(pkg, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      const stamp = new Date().toISOString().slice(0, 10);
+      link.download = `planner-${day}-${stamp}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setPlannerIoError(humanError(e, "Failed to export planner data"));
+    } finally {
+      setPlannerIoBusy(false);
+    }
+  }
+
+  const triggerPlannerImport = () => {
+    plannerImportInputRef.current?.click();
+  };
+
+  async function handlePlannerImportFile(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setPlannerIoError(null);
+    setPlannerImportSummary(null);
+    setPlannerIoBusy(true);
+    try {
+      const text = await file.text();
+      let parsed: PlannerExportPackage;
+      try {
+        parsed = JSON.parse(text) as PlannerExportPackage;
+      } catch {
+        throw new Error("קובץ אינו במבנה JSON תקין");
+      }
+      if (!parsed?.assignments || !Array.isArray(parsed.assignments)) {
+        throw new Error("הקובץ אינו מכיל שיבוצים לייבוא");
+      }
+
+      const summary = await importPlannerData({ ...parsed, day, replace: true });
+      setPlannerImportSummary(summary);
+
+      await loadAllAssignments(day);
+      await loadWarnings(day);
+      await loadDayRosterForWarnings(day);
+    } catch (e) {
+      setPlannerIoError(humanError(e, "Failed to import planner data"));
+    } finally {
+      setPlannerIoBusy(false);
+      event.target.value = "";
+    }
+  }
+
+  async function handlePlannerRawAllExport() {
+    setPlannerAllIoError(null);
+    setPlannerAllImportSummary(null);
+    setPlannerAllIoBusy(true);
+    try {
+      const pkg = await exportPlannerAllData();
+      const blob = new Blob([JSON.stringify(pkg, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      const stamp = new Date().toISOString().slice(0, 10);
+      link.download = `planner-all-${stamp}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setPlannerAllIoError(humanError(e, "Failed to export planner history"));
+    } finally {
+      setPlannerAllIoBusy(false);
+    }
+  }
+
+  const triggerPlannerAllImport = () => {
+    plannerAllImportInputRef.current?.click();
+  };
+
+  async function handlePlannerAllImportFile(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setPlannerAllIoError(null);
+    setPlannerAllImportSummary(null);
+    setPlannerAllIoBusy(true);
+    try {
+      const text = await file.text();
+      let parsed: PlannerAllExportPackage;
+      try {
+        parsed = JSON.parse(text) as PlannerAllExportPackage;
+      } catch {
+        throw new Error("קובץ אינו במבנה JSON תקין");
+      }
+      if (!parsed?.plans || !Array.isArray(parsed.plans)) {
+        throw new Error("הקובץ אינו מכיל תכניות לייבוא");
+      }
+
+      const summary = await importPlannerAllData({ ...parsed, replace: true });
+      setPlannerAllImportSummary(summary);
+
+      await loadAllAssignments(day);
+      await loadWarnings(day);
+      await loadDayRosterForWarnings(day);
+    } catch (e) {
+      setPlannerAllIoError(humanError(e, "Failed to import planner history"));
+    } finally {
+      setPlannerAllIoBusy(false);
+      event.target.value = "";
     }
   }
 
@@ -3822,6 +3967,126 @@ async function shufflePlanner() {
                 PDF
               </button>
             </div>
+          </div>
+
+          <div style={{ borderTop: '1px solid #4b5563', paddingTop: 16 }}>
+            <div style={{ fontWeight: 500, marginBottom: 8 }}>גיבוי יומי (JSON)</div>
+            <p style={{ fontSize: 13, margin: '0 0 12px', color: '#9ca3af' }}>
+              הקובץ כולל את כלל השיבוצים ליום {day}. הייבוא יחליף את השיבוצים ליום הנוכחי.
+            </p>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                onClick={handlePlannerRawExport}
+                disabled={plannerIoBusy}
+                style={{
+                  flex: '0 0 auto',
+                  padding: '10px 16px',
+                  borderRadius: '6px',
+                  border: '1px solid #10b981',
+                  backgroundColor: plannerIoBusy ? 'rgba(16, 185, 129, 0.2)' : 'rgba(16, 185, 129, 0.12)',
+                  color: '#10b981',
+                  cursor: plannerIoBusy ? 'wait' : 'pointer',
+                  fontWeight: 600,
+                }}
+              >
+                {plannerIoBusy ? "ממתין..." : "ייצוא JSON"}
+              </button>
+              <button
+                type="button"
+                onClick={triggerPlannerImport}
+                disabled={plannerIoBusy}
+                style={{
+                  flex: '0 0 auto',
+                  padding: '10px 16px',
+                  borderRadius: '6px',
+                  border: '1px solid #2563eb',
+                  backgroundColor: plannerIoBusy ? 'rgba(37, 99, 235, 0.15)' : 'rgba(37, 99, 235, 0.12)',
+                  color: '#bfdbfe',
+                  cursor: plannerIoBusy ? 'wait' : 'pointer',
+                  fontWeight: 600,
+                }}
+              >
+                {plannerIoBusy ? "ממתין..." : "ייבוא JSON"}
+              </button>
+            </div>
+            <input
+              ref={plannerImportInputRef}
+              type="file"
+              accept="application/json"
+              style={{ display: "none" }}
+              onChange={handlePlannerImportFile}
+            />
+            {plannerImportSummary && (
+              <div style={{ marginTop: 12, color: '#10b981', fontSize: 13 }}>
+                {`ייבוא הושלם עבור ${plannerImportSummary.day}: נמחקו ${plannerImportSummary.deleted_assignments} שיבוצים והתווספו ${plannerImportSummary.created_assignments}. נוצרו ${plannerImportSummary.created_missions} משימות, ${plannerImportSummary.created_roles} תפקידים ו-${plannerImportSummary.created_soldiers} חיילים.`}
+              </div>
+            )}
+            {plannerIoError && (
+              <div style={{ marginTop: 12, color: 'crimson', fontSize: 13 }}>
+                {plannerIoError}
+              </div>
+            )}
+          </div>
+
+          <div style={{ borderTop: '1px solid #4b5563', paddingTop: 16, marginTop: 16 }}>
+            <div style={{ fontWeight: 500, marginBottom: 8 }}>גיבוי מלא (כל הימים)</div>
+            <p style={{ fontSize: 13, margin: '0 0 12px', color: '#9ca3af' }}>
+              הורד או טען את כל התכניות הקיימות בכל הימים. ייבוא מוחק שיבוצים קיימים לפני יצירתם מחדש.
+            </p>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                onClick={handlePlannerRawAllExport}
+                disabled={plannerAllIoBusy}
+                style={{
+                  flex: '0 0 auto',
+                  padding: '10px 16px',
+                  borderRadius: '6px',
+                  border: '1px solid #10b981',
+                  backgroundColor: plannerAllIoBusy ? 'rgba(16, 185, 129, 0.2)' : 'rgba(16, 185, 129, 0.12)',
+                  color: '#10b981',
+                  cursor: plannerAllIoBusy ? 'wait' : 'pointer',
+                  fontWeight: 600,
+                }}
+              >
+                {plannerAllIoBusy ? "ממתין..." : "ייצוא מלא"}
+              </button>
+              <button
+                type="button"
+                onClick={triggerPlannerAllImport}
+                disabled={plannerAllIoBusy}
+                style={{
+                  flex: '0 0 auto',
+                  padding: '10px 16px',
+                  borderRadius: '6px',
+                  border: '1px solid #2563eb',
+                  backgroundColor: plannerAllIoBusy ? 'rgba(37, 99, 235, 0.15)' : 'rgba(37, 99, 235, 0.12)',
+                  color: '#bfdbfe',
+                  cursor: plannerAllIoBusy ? 'wait' : 'pointer',
+                  fontWeight: 600,
+                }}
+              >
+                {plannerAllIoBusy ? "ממתין..." : "ייבוא מלא"}
+              </button>
+            </div>
+            <input
+              ref={plannerAllImportInputRef}
+              type="file"
+              accept="application/json"
+              style={{ display: "none" }}
+              onChange={handlePlannerAllImportFile}
+            />
+            {plannerAllImportSummary && (
+              <div style={{ marginTop: 12, color: '#10b981', fontSize: 13 }}>
+                {`ייבוא הושלם: ${plannerAllImportSummary.total_days} ימים, נמחקו ${plannerAllImportSummary.deleted_assignments} שיבוצים והתווספו ${plannerAllImportSummary.created_assignments}. נוצרו ${plannerAllImportSummary.created_missions} משימות, ${plannerAllImportSummary.created_roles} תפקידים ו-${plannerAllImportSummary.created_soldiers} חיילים.`}
+              </div>
+            )}
+            {plannerAllIoError && (
+              <div style={{ marginTop: 12, color: 'crimson', fontSize: 13 }}>
+                {plannerAllIoError}
+              </div>
+            )}
           </div>
         </div>
       </Modal>

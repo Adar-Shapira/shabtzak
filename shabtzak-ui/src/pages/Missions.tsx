@@ -1,5 +1,6 @@
 // shabtzak-ui/src/pages/Missions.tsx
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
+import type React from "react";
 import EditIcon from "@mui/icons-material/Edit";
 import DeleteIcon from "@mui/icons-material/Delete";
 import CheckIcon from "@mui/icons-material/Check";
@@ -8,15 +9,19 @@ import AddIcon from "@mui/icons-material/Add";
 import RemoveIcon from "@mui/icons-material/Remove";
 import ArrowUpwardIcon from "@mui/icons-material/ArrowUpward";
 import ArrowDownwardIcon from "@mui/icons-material/ArrowDownward";
-import { api } from "../api";
 import Modal from "../components/Modal";
 import { useDisclosure } from "../hooks/useDisclosure";
 import { useSidebar } from "../contexts/SidebarContext";
 import {
+  api,
   listMissionSlots,
   createMissionSlot,
   deleteMissionSlot,
   type MissionSlot,
+  exportMissionsData,
+  importMissionsData,
+  type MissionsExportPackage,
+  type MissionsImportSummary,
 } from "../api";
 
 // Minimal Mission type for this page
@@ -507,6 +512,10 @@ export default function MissionsPage() {
   const [roles, setRoles] = useState<Role[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const importFileRef = useRef<HTMLInputElement>(null);
+  const [exportBusy, setExportBusy] = useState(false);
+  const [importBusy, setImportBusy] = useState(false);
+  const [importSummary, setImportSummary] = useState<MissionsImportSummary | null>(null);
 
   // create modal
   const addDlg = useDisclosure(false);
@@ -653,6 +662,63 @@ export default function MissionsPage() {
     }
   };
 
+  const handleExport = async () => {
+    setErr(null);
+    setImportSummary(null);
+    setExportBusy(true);
+    try {
+      const data = await exportMissionsData();
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      const stamp = new Date().toISOString().slice(0, 10);
+      link.download = `missions-export-${stamp}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (e: any) {
+      setErr(e?.response?.data?.detail ?? e?.message ?? "Failed to export missions");
+    } finally {
+      setExportBusy(false);
+    }
+  };
+
+  const handleImportClick = () => {
+    importFileRef.current?.click();
+  };
+
+  const handleImportFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setErr(null);
+    setImportSummary(null);
+    setImportBusy(true);
+    try {
+      const text = await file.text();
+      let parsed: MissionsExportPackage;
+      try {
+        parsed = JSON.parse(text) as MissionsExportPackage;
+      } catch {
+        throw new Error("קובץ אינו במבנה JSON תקין");
+      }
+      if (!parsed?.missions || !Array.isArray(parsed.missions)) {
+        throw new Error("הקובץ אינו מכיל נתוני משימות");
+      }
+      const summary = await importMissionsData(parsed);
+      setImportSummary(summary);
+      await load();
+    } catch (e: any) {
+      const message = e?.response?.data?.detail ?? e?.message ?? "Failed to import missions";
+      setErr(message);
+    } finally {
+      setImportBusy(false);
+      event.target.value = "";
+    }
+  };
+
   return (
     <div style={{ maxWidth: 1100, margin: "24px auto", padding: 16 }}>
       <Modal open={addDlg.isOpen} onClose={addDlg.close} title="הוסף משימה" maxWidth={640}>
@@ -731,6 +797,58 @@ export default function MissionsPage() {
           </div>
         </form>
       </Modal>
+
+      <input
+        ref={importFileRef}
+        type="file"
+        accept="application/json"
+        style={{ display: "none" }}
+        onChange={handleImportFile}
+      />
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, gap: 12 }}>
+        <div style={{ fontSize: 20, fontWeight: 600, color: "#e5e7eb" }}>ניהול משימות</div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button
+            type="button"
+            onClick={handleExport}
+            disabled={exportBusy}
+            style={{
+              padding: "8px 14px",
+              borderRadius: 8,
+              border: "1px solid #10b981",
+              backgroundColor: exportBusy ? "rgba(16, 185, 129, 0.2)" : "rgba(16, 185, 129, 0.12)",
+              color: "#10b981",
+              cursor: exportBusy ? "wait" : "pointer",
+              fontWeight: 600,
+            }}
+          >
+            {exportBusy ? "מייצא..." : "ייצוא"}
+          </button>
+          <button
+            type="button"
+            onClick={handleImportClick}
+            disabled={importBusy}
+            style={{
+              padding: "8px 14px",
+              borderRadius: 8,
+              border: "1px solid #2563eb",
+              backgroundColor: importBusy ? "rgba(37, 99, 235, 0.15)" : "rgba(37, 99, 235, 0.12)",
+              color: "#bfdbfe",
+              cursor: importBusy ? "wait" : "pointer",
+              fontWeight: 600,
+            }}
+          >
+            {importBusy ? "טוען..." : "ייבוא"}
+          </button>
+        </div>
+      </div>
+
+      {importSummary && (
+        <div style={{ color: "#10b981", marginBottom: 12, fontSize: 14 }}>
+          {`ייבוא הושלם: נוצרו ${importSummary.created_missions} משימות, עודכנו ${importSummary.updated_missions}, נוספו ${importSummary.created_roles} תפקידים, הוחלפו ${importSummary.slots_replaced} חלונות ו-${importSummary.requirements_replaced} דרישות.`}
+        </div>
+      )}
 
       {err && <div style={{ color: "crimson", marginBottom: 12 }}>{err}</div>}
       {loading && <div style={{ color: "#e5e7eb" }}>בטעינה...</div>}

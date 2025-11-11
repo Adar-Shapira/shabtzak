@@ -327,6 +327,188 @@ export async function deleteSavedPlan(planId: number): Promise<void> {
   await api.delete(`/saved-plans/${planId}`);
 }
 
+// --- Data Export/Import ------------------------------------------------------
+
+export type SoldiersExportPackage = {
+  kind: "soldiers";
+  version: string;
+  exported_at?: string;
+  departments: Array<{ name: string }>;
+  roles: Array<{ name: string }>;
+  soldiers: Array<{
+    name: string;
+    department?: string | null;
+    restrictions?: string | null;
+    missions_history?: string | null;
+    roles?: string[];
+  }>;
+};
+
+export type SoldiersImportSummary = {
+  created_departments: number;
+  created_roles: number;
+  created_soldiers: number;
+  updated_soldiers: number;
+  role_links_updated: number;
+};
+
+export async function exportSoldiersData(): Promise<SoldiersExportPackage> {
+  const { data } = await api.get<SoldiersExportPackage>("/data/export/soldiers");
+  return data;
+}
+
+export async function importSoldiersData(
+  payload: SoldiersExportPackage
+): Promise<SoldiersImportSummary> {
+  const { data } = await api.post<SoldiersImportSummary>("/data/import/soldiers", payload);
+  return data;
+}
+
+export type MissionsExportPackage = {
+  kind: "missions";
+  version: string;
+  exported_at?: string;
+  missions: Array<{
+    name: string;
+    total_needed?: number | null;
+    order?: number | null;
+    slots: Array<{ start_time: string; end_time: string }>;
+    requirements: Array<{ role: string; count: number }>;
+  }>;
+};
+
+export type MissionsImportSummary = {
+  created_missions: number;
+  updated_missions: number;
+  created_roles: number;
+  slots_replaced: number;
+  requirements_replaced: number;
+};
+
+export async function exportMissionsData(): Promise<MissionsExportPackage> {
+  const { data } = await api.get<MissionsExportPackage>("/data/export/missions");
+  return data;
+}
+
+export async function importMissionsData(
+  payload: MissionsExportPackage
+): Promise<MissionsImportSummary> {
+  const { data } = await api.post<MissionsImportSummary>("/data/import/missions", payload);
+  return data;
+}
+
+export type PlannerAssignmentExport = {
+  mission?: string | null;
+  role?: string | null;
+  soldier?: string | null;
+  start_at: string;
+  end_at: string;
+};
+
+export type PlannerExportPackage = {
+  kind: "planner";
+  version: string;
+  exported_at?: string;
+  day: string;
+  assignments: PlannerAssignmentExport[];
+};
+
+export type PlannerImportPayload = PlannerExportPackage & {
+  replace?: boolean;
+};
+
+export type PlannerImportSummary = {
+  day: string;
+  deleted_assignments: number;
+  created_assignments: number;
+  created_missions: number;
+  created_roles: number;
+  created_soldiers: number;
+};
+
+export async function exportPlannerData(day: string): Promise<PlannerExportPackage> {
+  const { data } = await api.get<PlannerExportPackage>("/data/export/planner", { params: { day } });
+  return data;
+}
+
+export async function importPlannerData(
+  payload: PlannerImportPayload
+): Promise<PlannerImportSummary> {
+  const { data } = await api.post<PlannerImportSummary>("/data/import/planner", payload);
+  return data;
+}
+
+export type PlannerAllExportPackage = {
+  kind: "planner-all";
+  version: string;
+  exported_at?: string;
+  plans: Array<{
+    day: string;
+    assignments: PlannerAssignmentExport[];
+  }>;
+};
+
+export type PlannerAllImportPayload = PlannerAllExportPackage & {
+  replace?: boolean;
+};
+
+export type PlannerAllImportSummary = {
+  total_days: number;
+  deleted_assignments: number;
+  created_assignments: number;
+  created_missions: number;
+  created_roles: number;
+  created_soldiers: number;
+};
+
+export async function exportPlannerAllData(): Promise<PlannerAllExportPackage> {
+  const { data } = await api.get<PlannerAllExportPackage>("/data/export/planner/all");
+  return data;
+}
+
+export async function importPlannerAllData(
+  payload: PlannerAllImportPayload
+): Promise<PlannerAllImportSummary> {
+  const { data } = await api.post<PlannerAllImportSummary>("/data/import/planner/all", payload);
+  return data;
+}
+
+export type ManpowerVacationRecord = {
+  soldier: string;
+  start_date: string;
+  end_date: string;
+};
+
+export type ManpowerExportPackage = {
+  kind: "manpower";
+  version: string;
+  exported_at?: string;
+  vacations: ManpowerVacationRecord[];
+};
+
+export type ManpowerImportPayload = ManpowerExportPackage & {
+  replace?: boolean;
+};
+
+export type ManpowerImportSummary = {
+  created_soldiers: number;
+  created_vacations: number;
+  skipped_vacations: number;
+  cleared_vacations: number;
+};
+
+export async function exportManpowerData(): Promise<ManpowerExportPackage> {
+  const { data } = await api.get<ManpowerExportPackage>("/data/export/manpower");
+  return data;
+}
+
+export async function importManpowerData(
+  payload: ManpowerImportPayload
+): Promise<ManpowerImportSummary> {
+  const { data } = await api.post<ManpowerImportSummary>("/data/import/manpower", payload);
+  return data;
+}
+
 // --- Planner Weights Settings ----------------------------------------------------------
 
 export type PlannerWeights = {

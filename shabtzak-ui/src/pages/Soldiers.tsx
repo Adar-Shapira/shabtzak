@@ -6,10 +6,22 @@ import EditIcon from "@mui/icons-material/Edit";
 import DeleteIcon from "@mui/icons-material/Delete";
 import CheckIcon from "@mui/icons-material/Check";
 import CloseIcon from "@mui/icons-material/Close";
-import { api } from "../api";
 import Modal from "../components/Modal";
 import { useDisclosure } from "../hooks/useDisclosure";
-import { listMissions, getSoldierMissionRestrictions, putSoldierMissionRestrictions, type Mission, getSoldierFriendships, updateSoldierFriendships, type Friendship } from "../api";
+import {
+    api,
+    listMissions,
+    getSoldierMissionRestrictions,
+    putSoldierMissionRestrictions,
+    type Mission,
+    getSoldierFriendships,
+    updateSoldierFriendships,
+    type Friendship,
+    exportSoldiersData,
+    importSoldiersData,
+    type SoldiersExportPackage,
+    type SoldiersImportSummary,
+} from "../api";
 import SoldierHistoryModal from "../components/SoldierHistoryModal";
 import VacationsModal from "../components/VacationsModal";
 import { useSidebar } from "../contexts/SidebarContext";
@@ -273,6 +285,10 @@ export default function SoldiersPage() {
     const [soldiers, setSoldiers] = useState<Soldier[]>([]);
     const [loading, setLoading] = useState(false);
     const [err, setErr] = useState<string | null>(null);
+    const importFileInputRef = useRef<HTMLInputElement>(null);
+    const [exportBusy, setExportBusy] = useState(false);
+    const [importBusy, setImportBusy] = useState(false);
+    const [importSummary, setImportSummary] = useState<SoldiersImportSummary | null>(null);
     const [searchQuery, setSearchQuery] = useState("");
     const [filterRole, setFilterRole] = useState<string>("");
 
@@ -316,6 +332,64 @@ export default function SoldiersPage() {
     const confirmDlg = useDisclosure(false);
     const [confirmMessage, setConfirmMessage] = useState<string>("");
     const [pendingDelete, setPendingDelete] = useState<{ type: "soldier" | "department" | "role"; id: number; name?: string } | null>(null);
+
+    const handleExport = async () => {
+        setErr(null);
+        setImportSummary(null);
+        setExportBusy(true);
+        try {
+            const data = await exportSoldiersData();
+            const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.href = url;
+            const stamp = new Date().toISOString().slice(0, 10);
+            link.download = `soldiers-export-${stamp}.json`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+        } catch (e: any) {
+            setErr(e?.response?.data?.detail ?? e?.message ?? "Failed to export soldiers");
+        } finally {
+            setExportBusy(false);
+        }
+    };
+
+    const handleImportClick = () => {
+        importFileInputRef.current?.click();
+    };
+
+    const handleImportFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0];
+        if (!file) {
+            return;
+        }
+        setErr(null);
+        setImportSummary(null);
+        setImportBusy(true);
+        try {
+            const text = await file.text();
+            let parsed: SoldiersExportPackage;
+            try {
+                parsed = JSON.parse(text) as SoldiersExportPackage;
+            } catch {
+                throw new Error("קובץ אינו במבנה JSON תקין");
+            }
+            if (!parsed?.soldiers || !Array.isArray(parsed.soldiers)) {
+                throw new Error("הקובץ אינו מכיל נתונים לחיילים");
+            }
+            const summary = await importSoldiersData(parsed);
+            setImportSummary(summary);
+            await loadAll();
+        } catch (e: any) {
+            const message = e?.response?.data?.detail ?? e?.message ?? "Failed to import soldiers";
+            setErr(message);
+        } finally {
+            setImportBusy(false);
+            event.target.value = "";
+        }
+    };
 
 
     const openRestrictions = async (s: Soldier) => {
@@ -1096,6 +1170,57 @@ export default function SoldiersPage() {
                 )}
             </Modal>
 
+            <input
+                ref={importFileInputRef}
+                type="file"
+                accept="application/json"
+                style={{ display: "none" }}
+                onChange={handleImportFile}
+            />
+
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 16 }}>
+                <div style={{ fontSize: 20, fontWeight: 600 }}>חיילים ומחלקות</div>
+                <div style={{ display: "flex", gap: 8 }}>
+                    <button
+                        type="button"
+                        onClick={handleExport}
+                        disabled={exportBusy}
+                        style={{
+                            padding: "8px 14px",
+                            borderRadius: 8,
+                            border: "1px solid #10b981",
+                            backgroundColor: exportBusy ? "rgba(16, 185, 129, 0.2)" : "rgba(16, 185, 129, 0.12)",
+                            color: "#10b981",
+                            cursor: exportBusy ? "wait" : "pointer",
+                            fontWeight: 600,
+                        }}
+                    >
+                        {exportBusy ? "מייצא..." : "ייצוא"}
+                    </button>
+                    <button
+                        type="button"
+                        onClick={handleImportClick}
+                        disabled={importBusy}
+                        style={{
+                            padding: "8px 14px",
+                            borderRadius: 8,
+                            border: "1px solid #2563eb",
+                            backgroundColor: importBusy ? "rgba(37, 99, 235, 0.15)" : "rgba(37, 99, 235, 0.12)",
+                            color: "#bfdbfe",
+                            cursor: importBusy ? "wait" : "pointer",
+                            fontWeight: 600,
+                        }}
+                    >
+                        {importBusy ? "טוען..." : "ייבוא"}
+                    </button>
+                </div>
+            </div>
+
+            {importSummary && (
+                <div style={{ color: "#10b981", marginBottom: 12, fontSize: 14 }}>
+                    {`ייבוא הושלם: נוצרו ${importSummary.created_soldiers} חיילים, עודכנו ${importSummary.updated_soldiers}, נוספו ${importSummary.created_departments} מחלקות ו-${importSummary.created_roles} תפקידים.`}
+                </div>
+            )}
             {err && <div style={{ color: "crimson", marginBottom: 12 }}>{err}</div>}
             {loading && <div>בטעינה...</div>}
 

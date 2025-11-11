@@ -20,6 +20,7 @@ from app.routers import mission_history
 from app.routers import warnings as warnings_router
 from app.routers.saved_plans import router as saved_plans_router
 from app.routers.friendships import router as friendships_router
+from app.routers.data_io import router as data_io_router
 
 
 
@@ -55,6 +56,7 @@ def build_app() -> FastAPI:
     app.include_router(warnings_router.router)
     app.include_router(saved_plans_router)
     app.include_router(friendships_router)
+    app.include_router(data_io_router)
 
     return app
 

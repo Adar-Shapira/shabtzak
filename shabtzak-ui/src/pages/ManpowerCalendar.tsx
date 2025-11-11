@@ -1,6 +1,13 @@
 // shabtzak-ui/src/pages/ManpowerCalendar.tsx
-import { useEffect, useState, useMemo } from "react";
-import { api } from "../api";
+import { useEffect, useState, useMemo, useRef } from "react";
+import type React from "react";
+import {
+  api,
+  exportManpowerData,
+  importManpowerData,
+  type ManpowerExportPackage,
+  type ManpowerImportSummary,
+} from "../api";
 import Modal from "../components/Modal";
 import VacationsModal from "../components/VacationsModal";
 import { useDisclosure } from "../hooks/useDisclosure";
@@ -34,6 +41,11 @@ export default function ManpowerCalendarPage() {
   const [vacations, setVacations] = useState<Vacation[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const importFileRef = useRef<HTMLInputElement>(null);
+  const [exportBusy, setExportBusy] = useState(false);
+  const [importBusy, setImportBusy] = useState(false);
+  const [importSummary, setImportSummary] = useState<ManpowerImportSummary | null>(null);
+  const [ioError, setIoError] = useState<string | null>(null);
 
   // Calendar state
   const [currentMonth, setCurrentMonth] = useState(new Date());
@@ -71,6 +83,64 @@ export default function ManpowerCalendarPage() {
       setErr(e?.response?.data?.detail ?? e?.message ?? "Failed to load data");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleExport = async () => {
+    setIoError(null);
+    setImportSummary(null);
+    setExportBusy(true);
+    try {
+      const data = await exportManpowerData();
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      const stamp = new Date().toISOString().slice(0, 10);
+      link.download = `manpower-${stamp}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (e: any) {
+      const message = e?.response?.data?.detail ?? e?.message ?? "Failed to export manpower data";
+      setIoError(message);
+    } finally {
+      setExportBusy(false);
+    }
+  };
+
+  const handleImportClick = () => {
+    importFileRef.current?.click();
+  };
+
+  const handleImportFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setIoError(null);
+    setImportSummary(null);
+    setImportBusy(true);
+    try {
+      const text = await file.text();
+      let parsed: ManpowerExportPackage;
+      try {
+        parsed = JSON.parse(text) as ManpowerExportPackage;
+      } catch {
+        throw new Error("קובץ אינו במבנה JSON תקין");
+      }
+      if (!parsed?.vacations || !Array.isArray(parsed.vacations)) {
+        throw new Error("הקובץ אינו מכיל נתוני חופשות");
+      }
+      const summary = await importManpowerData({ ...parsed, replace: true });
+      setImportSummary(summary);
+      await loadData();
+    } catch (e: any) {
+      const message = e?.response?.data?.detail ?? e?.message ?? "Failed to import manpower data";
+      setIoError(message);
+    } finally {
+      setImportBusy(false);
+      event.target.value = "";
     }
   };
 
@@ -268,6 +338,61 @@ export default function ManpowerCalendarPage() {
       <div style={{ padding: "8px 16px", textAlign: "center", fontSize: 18, fontWeight: 600, marginBottom: 16 }}>
         {monthNames[currentMonth.getMonth()]} {currentMonth.getFullYear()}
       </div>
+
+      <input
+        ref={importFileRef}
+        type="file"
+        accept="application/json"
+        style={{ display: "none" }}
+        onChange={handleImportFile}
+      />
+
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, padding: "0 16px 16px" }}>
+        <button
+          type="button"
+          onClick={handleExport}
+          disabled={exportBusy}
+          style={{
+            padding: "8px 16px",
+            borderRadius: 8,
+            border: "1px solid #10b981",
+            backgroundColor: exportBusy ? "rgba(16, 185, 129, 0.2)" : "rgba(16, 185, 129, 0.12)",
+            color: "#10b981",
+            cursor: exportBusy ? "wait" : "pointer",
+            fontWeight: 600,
+          }}
+        >
+          {exportBusy ? "מייצא..." : "ייצוא JSON"}
+        </button>
+        <button
+          type="button"
+          onClick={handleImportClick}
+          disabled={importBusy}
+          style={{
+            padding: "8px 16px",
+            borderRadius: 8,
+            border: "1px solid #2563eb",
+            backgroundColor: importBusy ? "rgba(37, 99, 235, 0.15)" : "rgba(37, 99, 235, 0.12)",
+            color: "#bfdbfe",
+            cursor: importBusy ? "wait" : "pointer",
+            fontWeight: 600,
+          }}
+        >
+          {importBusy ? "טוען..." : "ייבוא JSON"}
+        </button>
+      </div>
+
+      {importSummary && (
+        <div style={{ color: "#10b981", marginBottom: 12, padding: "0 16px", fontSize: 14 }}>
+          {`ייבוא הושלם: נוספו ${importSummary.created_vacations} חופשות חדשות ונוצרו ${importSummary.created_soldiers} חיילים. נמחקו ${importSummary.cleared_vacations} חופשות קודמות, ${importSummary.skipped_vacations} דילוגים.`}
+        </div>
+      )}
+
+      {ioError && (
+        <div style={{ color: "crimson", marginBottom: 12, padding: "0 16px", fontSize: 14 }}>
+          {ioError}
+        </div>
+      )}
 
       {err && <div style={{ color: "crimson", marginBottom: 12, marginTop: 12 }}>{err}</div>}
 
